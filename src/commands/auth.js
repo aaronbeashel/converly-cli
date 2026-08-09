@@ -14,6 +14,7 @@ export async function login({ flags, origin }) {
   const result = await loginFlow({
     origin,
     signup: Boolean(flags.signup),
+    noOpen: Boolean(flags["no-open"]),
     progress: (line) => process.stderr.write(`${line}\n`),
   });
   return { ok: true, ...result };
@@ -26,10 +27,12 @@ export async function logout({ origin }) {
 
 export async function whoami({ origin }) {
   const auth = resolveAuth(origin);
-  const [subscription, sites] = await Promise.all([
-    apiRequest(origin, "GET", "/subscription"),
-    apiRequest(origin, "GET", "/sites", { query: { limit: 100 } }),
-  ]);
+  // Sequential on purpose: two parallel 401s would race the token
+  // refresh. The second call rides the already-refreshed token.
+  const subscription = await apiRequest(origin, "GET", "/subscription");
+  const sites = await apiRequest(origin, "GET", "/sites", {
+    query: { limit: 100 },
+  });
   const stored = auth?.source === "stored" ? getStoredCredentials(origin) : null;
   return {
     origin,

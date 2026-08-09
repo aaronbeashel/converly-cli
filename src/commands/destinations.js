@@ -11,7 +11,12 @@
 import { apiRequest } from "../http.js";
 
 /** `google-ads` → `dest_google-ads`; accepts either form. */
-function destId(value) {
+function destId(value, commandHint) {
+  if (!value) {
+    throw new Error(
+      `Missing destination type. ${commandHint} (run \`converly destinations types\` for the list).`
+    );
+  }
   return value.startsWith("dest_") ? value : `dest_${value}`;
 }
 
@@ -20,19 +25,41 @@ export async function list({ origin }) {
 }
 
 export async function get({ args, origin }) {
-  return apiRequest(origin, "GET", `/destinations/${destId(args[0])}`);
+  return apiRequest(
+    origin,
+    "GET",
+    `/destinations/${destId(args[0], "Usage: converly destinations get <type>")}`
+  );
 }
 
 export async function types({ origin }) {
-  return apiRequest(origin, "GET", "/destination-types");
+  return apiRequest(origin, "GET", "/destination-types", { public: true });
 }
 
 export async function connect({ args, flags, origin }) {
+  if (!args[0]) {
+    throw new Error(
+      "Missing destination type. Usage: converly destinations connect <type> --site <site_id>."
+    );
+  }
   if (!flags.site) {
     throw new Error(
       "Missing --site. Pass the site id (from `converly sites list`) this connection is for."
     );
   }
+
+  // Browser-side pixel destinations have no connect step at all — catch
+  // the mistake here instead of sending a doomed handoff request.
+  const catalogue = await apiRequest(origin, "GET", "/destination-types", {
+    public: true,
+  });
+  const entry = (catalogue?.data ?? []).find((d) => d.type === args[0]);
+  if (entry && (entry.connection_types ?? []).length === 0) {
+    throw new Error(
+      `${entry.display_label ?? args[0]} needs no connection — it fires browser side via the platform's own pixel. Skip straight to creating the flow.`
+    );
+  }
+
   const handoff = await apiRequest(origin, "POST", "/handoffs", {
     body: {
       purpose: "connect_destination",
@@ -52,11 +79,16 @@ export async function connect({ args, flags, origin }) {
 }
 
 export async function handoffGet({ args, origin }) {
+  if (!args[0]) throw new Error("Usage: converly handoffs get <handoff_id>");
   return apiRequest(origin, "GET", `/handoffs/${args[0]}`);
 }
 
 export async function handoffWait({ args, flags, origin }) {
+  if (!args[0]) throw new Error("Usage: converly handoffs wait <handoff_id>");
   const timeoutSeconds = Number(flags.timeout ?? 600);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error("--timeout must be a positive number of seconds.");
+  }
   const intervalMs = 4000;
   const deadline = Date.now() + timeoutSeconds * 1000;
 
@@ -68,13 +100,19 @@ export async function handoffWait({ args, flags, origin }) {
 
   if (handoff.status === "completed") return handoff;
 
-  const reason =
-    handoff.status === "pending"
-      ? `Timed out after ${timeoutSeconds}s — the connection was not completed in the browser.`
-      : `Handoff ended with status "${handoff.status}".`;
-  const err = new Error(
-    `${reason} Create a fresh connect link with \`converly destinations connect\` if needed.`
-  );
+  // Precise recovery advice: a pending-but-unexpired link is still
+  // usable — resuming the wait beats minting a new link.
+  let reason;
+  if (handoff.status === "pending") {
+    const stillValid =
+      handoff.expires_at && new Date(handoff.expires_at) > new Date();
+    reason = stillValid
+      ? `Timed out after ${timeoutSeconds}s, but the link is still valid until ${handoff.expires_at}. Re-run \`converly handoffs wait ${args[0]}\` once the human has finished in the browser.`
+      : `Timed out after ${timeoutSeconds}s and the link has expired. Create a fresh one with \`converly destinations connect\`.`;
+  } else {
+    reason = `Handoff ended with status "${handoff.status}". Create a fresh connect link with \`converly destinations connect\` if needed.`;
+  }
+  const err = new Error(reason);
   err.handoff = handoff;
   throw err;
 }
@@ -83,7 +121,7 @@ export async function conversions({ args, flags, origin }) {
   return apiRequest(
     origin,
     "GET",
-    `/destinations/${destId(args[0])}/conversions`,
+    `/destinations/${destId(args[0], "Usage: converly destinations conversions <type>")}/conversions`,
     { query: { refresh: flags.refresh ? "true" : undefined } }
   );
 }

@@ -8,12 +8,17 @@ import { apiRequest } from "../http.js";
 export async function triggerTypes({ flags, origin }) {
   return apiRequest(origin, "GET", "/trigger-types", {
     query: { platform: flags.platform },
+    public: true,
   });
 }
 
 export async function actionTypes({ args, origin }) {
+  if (!args[0]) {
+    throw new Error("Usage: converly actions <destination_type>  (e.g. google-ads)");
+  }
   return apiRequest(origin, "GET", "/action-types", {
     query: { destination_type: args[0] },
+    public: true,
   });
 }
 
@@ -27,8 +32,13 @@ export async function list({ flags, origin }) {
   });
 }
 
+function requireFlowId(args, usage) {
+  if (!args[0]) throw new Error(`Usage: ${usage}`);
+  return args[0];
+}
+
 export async function get({ args, origin }) {
-  return apiRequest(origin, "GET", `/flows/${args[0]}`);
+  return apiRequest(origin, "GET", `/flows/${requireFlowId(args, "converly flows get <flow_id>")}`);
 }
 
 function parseJsonFlag(value, flagName) {
@@ -54,7 +64,13 @@ function buildActionConfig(flags) {
     conversion.event_name = flags["event-name"];
     conversion.is_custom = Boolean(flags.custom);
   }
-  if (flags.value !== undefined) conversion.value = Number(flags.value);
+  if (flags.value !== undefined) {
+    const value = Number(flags.value);
+    if (!Number.isFinite(value)) {
+      throw new Error("--value must be a number.");
+    }
+    conversion.value = value;
+  }
   if (flags.currency !== undefined) conversion.currency = flags.currency;
 
   const config = {};
@@ -116,25 +132,33 @@ export async function update({ args, flags, origin }) {
       "flows update takes --json with the fields to change, e.g. --json '{\"name\":\"New name\"}'."
     );
   }
-  return apiRequest(origin, "PATCH", `/flows/${args[0]}`, {
+  return apiRequest(origin, "PATCH", `/flows/${requireFlowId(args, "converly flows update <flow_id> --json '{...}'")}`, {
     body: parseJsonFlag(flags.json, "json"),
   });
 }
 
-export async function remove({ args, origin }) {
-  return apiRequest(origin, "DELETE", `/flows/${args[0]}`);
+export async function remove({ args, flags, origin }) {
+  const flowId = requireFlowId(args, "converly flows delete <flow_id> --yes");
+  // Deletion is irreversible; require the explicit flag so an agent
+  // can't delete on a whim mid-plan.
+  if (!flags.yes) {
+    throw new Error(
+      `Deleting ${flowId} is permanent. Re-run with --yes to confirm (unpublish first if it's published).`
+    );
+  }
+  return apiRequest(origin, "DELETE", `/flows/${flowId}`);
 }
 
 export async function validate({ args, origin }) {
-  return apiRequest(origin, "POST", `/flows/${args[0]}/validate`);
+  return apiRequest(origin, "POST", `/flows/${requireFlowId(args, "converly flows validate <flow_id>")}/validate`);
 }
 
 export async function publish({ args, origin }) {
-  return apiRequest(origin, "POST", `/flows/${args[0]}/publish`);
+  return apiRequest(origin, "POST", `/flows/${requireFlowId(args, "converly flows publish <flow_id>")}/publish`);
 }
 
 export async function unpublish({ args, origin }) {
-  return apiRequest(origin, "POST", `/flows/${args[0]}/unpublish`);
+  return apiRequest(origin, "POST", `/flows/${requireFlowId(args, "converly flows unpublish <flow_id>")}/unpublish`);
 }
 
 export async function testEvent({ flags, origin }) {

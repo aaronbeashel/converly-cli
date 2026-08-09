@@ -32,7 +32,7 @@ converly install snippet site_XXX          # add the tag to your site's <head>
 converly destinations connect google-ads --site site_XXX
 converly handoffs wait hdf_XXX             # finish connecting in the browser
 converly flows create --site site_XXX --name "Demo requests" \
-  --trigger html-form --destination google-ads --conversion-id 123456
+  --trigger generic-form --destination google-ads --conversion-id 123456
 converly flows publish flow_XXX
 converly test-event --flow flow_XXX        # proves delivery end to end
 ```
@@ -49,10 +49,11 @@ The agent runbook lives at [github.com/aaronbeashel/converly-agent](https://gith
 
 Design notes for agent use:
 
-- stdout is always one JSON document; progress text goes to stderr.
+- stdout is one JSON document for every data command (help and version print text); progress goes to stderr.
 - Exit code 0 means success. Errors are JSON on stderr with the API's error code.
-- POST commands send an idempotency key automatically, so retries are safe.
+- Each POST generates an idempotency key for its own internal retry. To make an explicit retry of the same operation safe across invocations, pass the same `--idempotency-key` value both times.
 - Ad platform credentials never pass through the CLI. Connecting a destination returns a Converly-hosted URL where a human authorizes the platform directly.
+- `converly login` needs the browser and the CLI on the same machine. For remote or headless environments, set `CONVERLY_API_KEY`.
 
 ## All commands
 

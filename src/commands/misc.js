@@ -55,7 +55,7 @@ export async function api({ args, flags, origin }) {
   const path = args[1];
   if (!["GET", "POST", "PATCH", "DELETE"].includes(method) || !path) {
     throw new Error(
-      "Usage: converly api <GET|POST|PATCH|DELETE> </v1-path> [--json '<body>']"
+      "Usage: converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1, e.g. /flows?limit=5> [--json '<body>']"
     );
   }
   let body;
@@ -66,7 +66,11 @@ export async function api({ args, flags, origin }) {
       throw new Error(`--json is not valid JSON: ${cause.message}`);
     }
   }
-  return apiRequest(origin, method, path.startsWith("/") ? path : `/${path}`, {
-    body,
-  });
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  if (/^\/v1(\/|$)/.test(normalized)) {
+    throw new Error(
+      "Pass the path relative to /api/v1 — write /flows, not /v1/flows."
+    );
+  }
+  return apiRequest(origin, method, normalized, { body });
 }

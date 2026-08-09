@@ -83,3 +83,37 @@ test("login scopes stay inside the server's registration ceiling", () => {
     assert.ok(ceiling.has(scope), `scope ${scope} is outside the DCR ceiling`);
   }
 });
+
+test("parseArgv: --flag=false on a boolean flag means false", () => {
+  const { flags } = parseArgv(["login", "--signup=false", "--staging=true"]);
+  assert.equal(flags.signup, false);
+  assert.equal(flags.staging, true);
+});
+
+test("normalizeOrigin refuses cleartext http on non-loopback hosts", () => {
+  assert.throws(() => normalizeOrigin("http://example.com"), /Refusing insecure/);
+  assert.equal(normalizeOrigin("http://127.0.0.1:8080"), "http://127.0.0.1:8080");
+});
+
+test("escapeHtml neutralizes markup in reflected values", async () => {
+  const { escapeHtml } = await import("../src/oauth.js");
+  assert.equal(
+    escapeHtml('<script>alert("x")</script>'),
+    "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
+  );
+});
+
+test("CONVERLY_API_KEY is only offered to trusted origins", async () => {
+  const { resolveAuth, PROD_ORIGIN } = await import("../src/config.js");
+  const prev = process.env.CONVERLY_API_KEY;
+  process.env.CONVERLY_API_KEY = "sk_live_test_value";
+  try {
+    assert.equal(resolveAuth(PROD_ORIGIN)?.source, "env");
+    // An arbitrary origin must never receive the environment key.
+    const attacker = resolveAuth("https://attacker.example");
+    assert.notEqual(attacker?.source, "env");
+  } finally {
+    if (prev === undefined) delete process.env.CONVERLY_API_KEY;
+    else process.env.CONVERLY_API_KEY = prev;
+  }
+});

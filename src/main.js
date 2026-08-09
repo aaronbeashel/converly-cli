@@ -9,7 +9,7 @@
 
 import { createRequire } from "node:module";
 import { resolveOrigin } from "./config.js";
-import { ApiError, AuthMissingError } from "./http.js";
+import { ApiError, AuthMissingError, setDefaultIdempotencyKey } from "./http.js";
 import * as auth from "./commands/auth.js";
 import * as sites from "./commands/sites.js";
 import * as destinations from "./commands/destinations.js";
@@ -28,6 +28,8 @@ const BOOLEAN_FLAGS = new Set([
   "custom",
   "help",
   "version",
+  "no-open",
+  "yes",
 ]);
 
 export function parseArgv(argv) {
@@ -38,7 +40,10 @@ export function parseArgv(argv) {
     if (token.startsWith("--")) {
       const eq = token.indexOf("=");
       if (eq !== -1) {
-        flags[token.slice(2, eq)] = token.slice(eq + 1);
+        const name = token.slice(2, eq);
+        const value = token.slice(eq + 1);
+        // `--signup=false` must mean false, not truthy-string true.
+        flags[name] = BOOLEAN_FLAGS.has(name) ? value !== "false" : value;
       } else {
         const name = token.slice(2);
         const next = argv[i + 1];
@@ -64,8 +69,8 @@ export function parseArgv(argv) {
 const COMMANDS = {
   "login": {
     run: auth.login,
-    usage: "converly login [--signup] [--staging]",
-    help: "Log in via the browser. --signup sends new users to account creation (free trial starts automatically). Credentials are stored in ~/.converly/config.json.",
+    usage: "converly login [--signup] [--staging] [--no-open]",
+    help: "Log in via a browser ON THIS MACHINE (the redirect hands the credential back to the CLI here — a phone or another computer can't complete it). --signup sends new users to account creation (free trial starts automatically). --no-open prints the URL without launching a browser. Credentials are stored in ~/.converly/config.json.",
   },
   "logout": {
     run: auth.logout,
@@ -174,8 +179,8 @@ const COMMANDS = {
   },
   "flows delete": {
     run: flows.remove,
-    usage: "converly flows delete <flow_id>",
-    help: "Delete a flow. Unpublish first if it's published.",
+    usage: "converly flows delete <flow_id> --yes",
+    help: "Delete a flow permanently. Requires --yes. Unpublish first if it's published.",
   },
   "flows validate": {
     run: flows.validate,
@@ -229,8 +234,8 @@ const COMMANDS = {
   },
   "api": {
     run: misc.api,
-    usage: "converly api <GET|POST|PATCH|DELETE> </v1-path> [--json '<body>']",
-    help: "Raw /v1 request for anything not covered by a named command.",
+    usage: "converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1> [--json '<body>']",
+    help: "Raw API request for anything not covered by a named command. Write /flows, not /v1/flows.",
   },
 };
 
@@ -238,24 +243,26 @@ function overviewHelp() {
   const lines = [
     `Converly CLI v${VERSION} — conversion tracking for ad platforms.`,
     "",
-    "Every command prints JSON to stdout. Global flags: --staging (use the",
-    "staging deployment), --api <origin> (custom deployment).",
+    "Every data command prints one JSON document to stdout (help and",
+    "version print text). Global flags: --staging (staging deployment),",
+    "--api <origin> (custom deployment), --idempotency-key <key> (pin the",
+    "key for a POST so an explicit retry can't double-create).",
     "Auth: `converly login`, or set CONVERLY_API_KEY for headless use.",
     "",
-    "Typical setup sequence:",
-    "  1. converly login --signup",
-    "  2. converly sites list                          # find the site id",
-    "  3. converly sites update <site> --domain example.com",
-    "  4. converly install snippet <site>              # add tag to the website",
-    "  5. converly destinations connect google-ads --site <site>",
-    "     converly handoffs wait <handoff_id>          # human authorizes in browser",
-    "  6. converly triggers  /  converly actions google-ads",
-    "     converly destinations conversions google-ads # pick a conversion",
-    "     converly flows create --site <site> --name \"Leads\" --trigger html-form \\",
-    "       --destination google-ads --conversion-id <id>",
-    "  7. converly flows validate <flow> && converly flows publish <flow>",
-    "  8. converly test-event --flow <flow>            # prove delivery end to end",
-    "  9. converly events list --limit 10              # watch real conversions",
+    "Typical setup sequence (one command per line):",
+    "  converly login --signup",
+    "  converly sites list                              # find the site id",
+    "  converly sites update <site> --domain example.com",
+    "  converly install snippet <site>                  # add tag to the website",
+    "  converly destinations connect google-ads --site <site>",
+    "  converly handoffs wait <handoff_id>              # human authorizes in browser",
+    "  converly triggers                                # find the form tool slug",
+    "  converly destinations conversions google-ads     # pick a conversion",
+    "  converly flows create --site <site> --name \"Leads\" --trigger generic-form --destination google-ads --conversion-id <id>",
+    "  converly flows validate <flow>",
+    "  converly flows publish <flow>",
+    "  converly test-event --flow <flow>                # verify destination delivery",
+    "  converly events list --limit 10                  # watch real conversions",
     "",
     "Commands:",
   ];
@@ -319,9 +326,13 @@ export async function main(argv) {
     return;
   }
 
-  const origin = resolveOrigin(flags);
-
   try {
+    // Inside the error boundary: a malformed --api value must produce a
+    // JSON error, not a raw stack trace.
+    const origin = resolveOrigin(flags);
+    if (typeof flags["idempotency-key"] === "string") {
+      setDefaultIdempotencyKey(flags["idempotency-key"]);
+    }
     const result = await match.def.run({ args: match.rest, flags, origin });
     process.stdout.write(JSON.stringify(result ?? { ok: true }, null, 2) + "\n");
   } catch (err) {
