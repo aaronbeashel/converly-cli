@@ -1,0 +1,46 @@
+{
+  "name": "converly",
+  "version": "1.0.0",
+  "description": "Command line tool for Converly conversion tracking. Set up server-side conversion tracking for Google Ads, Meta, GA4 and more from a terminal or an AI agent.",
+  "type": "module",
+  "bin": {
+    "converly": "bin/converly.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "converly",
+    "conversion-tracking",
+    "google-ads",
+    "meta-ads",
+    "facebook-capi",
+    "ga4",
+    "attribution",
+    "marketing",
+    "agent",
+    "openclaw",
+    "claude-code",
+    "mcp",
+    "cli"
+  ],
+  "homepage": "https://converly.io/agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaronbeashel/converly-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aaronbeashel/converly-cli/issues"
+  },
+  "license": "MIT",
+  "dependencies": {}
+}
