@@ -38,7 +38,9 @@ export async function connect({ args, flags, origin }) {
         "which they hand to whoever maintains the site's backend. Then run " +
         "`converly handoffs wait " +
         handoff.id +
-        "` to confirm it completed."
+        "` to confirm it completed. Completion means the credentials were " +
+        "issued, NOT that the backend call is wired up — that remaining step " +
+        "is only proven when the first conversion arrives."
       : "A human must open `url` in a browser and sign in to the platform there. " +
         "Then run `converly handoffs wait " +
         handoff.id +
