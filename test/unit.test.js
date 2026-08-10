@@ -239,3 +239,35 @@ test("CONVERLY_API_KEY is only offered to trusted origins", async () => {
     else process.env.CONVERLY_API_KEY = prev;
   }
 });
+
+test("login dispatch: every environment row routes correctly", async () => {
+  const { resolveLoginMode, envTruthy } = await import("../src/login-mode.js");
+  const rows = [
+    // [flags, env, platform, expected]
+    [{ device: true }, {}, "darwin", "device"],
+    [{ browser: true }, { CI: "1" }, "linux", "loopback"],
+    [{ "no-open": true }, {}, "linux", "loopback"], // unchanged semantics
+    [{}, { CI: "true" }, "darwin", "device_auto"],
+    [{}, { CI: "false" }, "darwin", "loopback"], // CI="false" is false
+    [{}, { SSH_CONNECTION: "1.2.3.4 22" }, "darwin", "device_auto"], // macOS over SSH
+    [{}, { SSH_TTY: "/dev/pts/0" }, "linux", "device_auto"],
+    [{}, {}, "linux", "device_auto"], // linux, no display
+    [{}, { DISPLAY: ":0" }, "linux", "loopback"], // linux desktop
+    [{}, { WAYLAND_DISPLAY: "wayland-0" }, "linux", "loopback"],
+    [{}, {}, "darwin", "loopback"], // plain laptop
+    [{}, {}, "win32", "loopback"],
+  ];
+  for (const [flags, env, platform, expected] of rows) {
+    assert.equal(
+      resolveLoginMode(flags, env, platform),
+      expected,
+      JSON.stringify({ flags, env, platform })
+    );
+  }
+  assert.throws(
+    () => resolveLoginMode({ device: true, browser: true }, {}, "darwin"),
+    /conflict/
+  );
+  assert.equal(envTruthy("0"), false);
+  assert.equal(envTruthy("yes"), true);
+});

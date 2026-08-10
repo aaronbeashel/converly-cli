@@ -33,6 +33,7 @@ const BOOLEAN_FLAGS = new Set([
   "yes",
   "allow-real",
   "device",
+  "browser",
 ]);
 
 export function parseArgv(argv) {
@@ -88,9 +89,9 @@ const GLOBAL_FLAGS = new Set([
 export const COMMANDS = {
   "login": {
     run: auth.login,
-    usage: "converly login [--signup] [--device] [--staging] [--no-open]",
-    flags: ["signup", "no-open", "device", "label"],
-    help: "Log in. Default: opens a browser ON THIS MACHINE (the redirect hands the credential back here, so a phone or another computer can't complete it). --device instead shows a short code and a URL you approve from ANY device, which is the way to log in on a server, in CI, or from a headless agent. --signup sends new users to account creation (free trial starts automatically). --no-open prints the browser URL instead of launching it. --label names the device-login key shown in Settings. Credentials are stored in ~/.converly/config.json.",
+    usage: "converly login [--signup] [--device] [--browser] [--staging] [--no-open]",
+    flags: ["signup", "no-open", "device", "browser", "label"],
+    help: "Log in. Default: opens a browser ON THIS MACHINE (the redirect hands the credential back here, so a phone or another computer can't complete it). --device instead shows a short code and a URL you approve from ANY device, which is the way to log in on a server, in CI, or from a headless agent. --signup sends new users to account creation (free trial starts automatically). --no-open prints the browser URL instead of launching it. --label names the device-login key shown in Settings. On CI/SSH/headless machines the default automatically uses device login; --browser forces the local browser flow instead. Credentials are stored in ~/.converly/config.json.",
   },
   "logout": {
     run: auth.logout,

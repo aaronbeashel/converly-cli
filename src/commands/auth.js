@@ -9,14 +9,22 @@ import {
 } from "../config.js";
 import { loginFlow } from "../oauth.js";
 import { deviceLoginFlow } from "../device-login.js";
+import { resolveLoginMode } from "../login-mode.js";
 import { apiRequest } from "../http.js";
 
 export async function login({ flags, origin }) {
   const progress = (line) => process.stderr.write(`${line}\n`);
-  // --device: approve from any device (phone, another computer). The
-  // only path that works headless / on a remote box, where the loopback
-  // browser flow can't (browser and CLI must share a machine there).
-  if (flags.device) {
+  const mode = resolveLoginMode(flags);
+
+  if (mode === "device" || mode === "device_auto") {
+    if (mode === "device_auto") {
+      // Auto-routed: no browser can open here (CI / SSH / no display).
+      // Say so once, then run the device flow — its printed code + URL
+      // are exactly what an agent needs to hand to the human.
+      progress(
+        "No browser is available here, using device login instead. (Force the browser flow with --browser.)"
+      );
+    }
     const result = await deviceLoginFlow({
       origin,
       label: typeof flags.label === "string" ? flags.label : undefined,
@@ -24,6 +32,7 @@ export async function login({ flags, origin }) {
     });
     return { ok: true, ...result };
   }
+
   const result = await loginFlow({
     origin,
     signup: Boolean(flags.signup),
