@@ -18,7 +18,9 @@
 import os from "node:os";
 import { setStoredCredentials } from "./config.js";
 
-const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+// Fallback only — the server-returned expires_at is the real deadline
+// (see deviceLoginFlow). 30 min matches the server handoff TTL.
+const POLL_TIMEOUT_MS = 30 * 60 * 1000;
 
 function defaultLabel() {
   try {
@@ -54,7 +56,7 @@ export async function deviceLoginFlow({ origin, label, progress = () => {} }) {
       start.parsed?.message ?? start.parsed?.error ?? `HTTP ${start.res.status}`;
     throw new Error(`Could not start device login: ${detail}`);
   }
-  const { user_code, verification_url, poll_token, poll_interval_ms } =
+  const { user_code, verification_url, poll_token, poll_interval_ms, expires_at } =
     start.parsed;
 
   progress("To finish logging in, open this page on any device (your phone is fine):");
@@ -63,7 +65,15 @@ export async function deviceLoginFlow({ origin, label, progress = () => {} }) {
   progress("Waiting for you to approve it...");
 
   const intervalMs = Math.max(2000, Number(poll_interval_ms) || 5000);
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  // Poll until the SERVER's own expiry, so the CLI never stops listening
+  // while the code is still approvable. A stale/absent value falls back to
+  // the local cap. (Codex round 1: a 15-min CLI cap under a 30-min server
+  // TTL left a window where the page could mint a key nobody was polling
+  // for.)
+  const serverDeadline = expires_at ? new Date(expires_at).getTime() : NaN;
+  const deadline = Number.isFinite(serverDeadline)
+    ? serverDeadline
+    : Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
@@ -115,6 +125,6 @@ export async function deviceLoginFlow({ origin, label, progress = () => {} }) {
     // Unknown status — keep waiting rather than aborting a live approval.
   }
   throw new Error(
-    "Timed out waiting for approval (15 minutes). Run `converly login --device` again when you're ready."
+    "The code expired before it was approved. Run `converly login --device` again when you're ready."
   );
 }

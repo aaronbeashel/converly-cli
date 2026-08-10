@@ -36,7 +36,11 @@ export async function login({ flags, origin }) {
   const result = await loginFlow({
     origin,
     signup: Boolean(flags.signup),
-    noOpen: Boolean(flags["no-open"]),
+    // --browser means "use the local browser", so it forces the launch
+    // and overrides --no-open when both are given (Codex round 2). Without
+    // this, `--browser --no-open` picks loopback yet suppresses the open —
+    // contradictory.
+    noOpen: Boolean(flags["no-open"]) && !flags.browser,
     progress,
   });
   return { ok: true, ...result };
