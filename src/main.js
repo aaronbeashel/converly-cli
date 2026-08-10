@@ -14,6 +14,7 @@ import * as auth from "./commands/auth.js";
 import * as sites from "./commands/sites.js";
 import * as destinations from "./commands/destinations.js";
 import * as flows from "./commands/flows.js";
+import * as triggers from "./commands/triggers.js";
 import * as events from "./commands/events.js";
 import * as misc from "./commands/misc.js";
 
@@ -63,179 +64,235 @@ export function parseArgv(argv) {
 }
 
 /**
- * Registry: "group verb" (or a single word) → handler + usage line.
- * Usage lines double as the agent-facing documentation, so they carry
- * the flags and an example where the shape isn't obvious.
+ * Flags every command accepts: deployment targeting (--staging, --api),
+ * help/version, and plumbing the entry point reads before the handler.
  */
-const COMMANDS = {
+const GLOBAL_FLAGS = new Set([
+  "staging",
+  "api",
+  "help",
+  "version",
+  "idempotency-key",
+  "no-open",
+  "yes",
+]);
+
+/**
+ * Registry: "group verb" (or a single word) → handler + usage line +
+ * the flags the handler reads (anything else is rejected — see the
+ * strict check in main()). Usage lines double as the agent-facing
+ * documentation, so they carry the flags and an example where the
+ * shape isn't obvious.
+ */
+export const COMMANDS = {
   "login": {
     run: auth.login,
     usage: "converly login [--signup] [--staging] [--no-open]",
+    flags: ["signup", "no-open"],
     help: "Log in via a browser ON THIS MACHINE (the redirect hands the credential back to the CLI here — a phone or another computer can't complete it). --signup sends new users to account creation (free trial starts automatically). --no-open prints the URL without launching a browser. Credentials are stored in ~/.converly/config.json.",
   },
   "logout": {
     run: auth.logout,
     usage: "converly logout [--staging]",
+    flags: [],
     help: "Forget the stored login for this deployment.",
   },
   "whoami": {
     run: auth.whoami,
     usage: "converly whoami",
+    flags: [],
     help: "Show the current account: subscription state and sites.",
   },
   "sites list": {
     run: sites.list,
     usage: "converly sites list [--limit N]",
+    flags: ["limit", "starting-after"],
     help: "List the account's sites.",
   },
   "sites get": {
     run: sites.get,
     usage: "converly sites get <site_id>",
+    flags: [],
     help: "Fetch one site.",
   },
   "sites create": {
     run: sites.create,
     usage: "converly sites create [--name X] [--domain example.com] [--timezone Z]",
+    flags: ["name", "domain", "timezone"],
     help: "Create a site. Most accounts already have a default site — prefer `sites update` on it.",
   },
   "sites update": {
     run: sites.update,
     usage: "converly sites update <site_id> [--name X] [--domain example.com] [--timezone Z]",
+    flags: ["name", "domain", "timezone"],
     help: "Update a site. Setting --domain is REQUIRED before tracking works (events from unknown domains are rejected).",
   },
   "install snippet": {
     run: sites.snippet,
     usage: "converly install snippet <site_id>",
+    flags: [],
     help: "Get the <script> tag to add to the website's <head>.",
   },
   "install status": {
     run: sites.installStatus,
     usage: "converly install status <site_id>",
+    flags: [],
     help: 'Check whether tracking is live. detection "confirmed" = proven; "never_seen" = no conversions captured yet (NOT proof the snippet is missing).',
   },
   "destinations types": {
     run: destinations.types,
     usage: "converly destinations types",
+    flags: [],
     help: "Catalogue of ad platforms Converly can send conversions to.",
   },
   "destinations list": {
     run: destinations.list,
     usage: "converly destinations list",
+    flags: [],
     help: "The account's destinations and whether each is connected.",
   },
   "destinations get": {
     run: destinations.get,
     usage: "converly destinations get <type>   (e.g. google-ads)",
+    flags: [],
     help: "One destination's connection state.",
   },
   "destinations connect": {
     run: destinations.connect,
     usage: "converly destinations connect <type> --site <site_id>",
+    flags: ["site", "return-url"],
     help: "Create a connect link for an ad platform. A HUMAN must open the returned url in a browser to authorize; then `converly handoffs wait <id>`.",
   },
   "destinations conversions": {
     run: destinations.conversions,
     usage: "converly destinations conversions <type> [--refresh]",
+    flags: ["refresh"],
     help: "List the conversion actions / pixel events available in a connected destination (the picker for flow configs).",
   },
   "handoffs get": {
     run: destinations.handoffGet,
     usage: "converly handoffs get <handoff_id>",
+    flags: [],
     help: "Check a connect link's status once.",
   },
   "handoffs wait": {
     run: destinations.handoffWait,
     usage: "converly handoffs wait <handoff_id> [--timeout seconds]",
+    flags: ["timeout"],
     help: "Poll a connect link until it completes (default timeout 600s). Exits non-zero if it expires or is cancelled.",
   },
   "triggers": {
     run: flows.triggerTypes,
     usage: "converly triggers [--platform webflow|wordpress|wix|framer]",
+    flags: ["platform"],
     help: "Catalogue of trigger types and form-tool provider slugs. Use a slug from providers[] as the flow's trigger integrationId.",
+  },
+  "triggers connect": {
+    run: triggers.connect,
+    usage: "converly triggers connect <source> --site <site_id>   (e.g. api)",
+    flags: ["site"],
+    help: "Create a connect link for a trigger source that needs setup outside the CLI. For most sources a HUMAN opens the returned url and signs in to the platform there. For the api source the page shows the site's webhook URL + secret, which the human hands to whoever maintains the backend. Then `converly handoffs wait <id>`.",
   },
   "actions": {
     run: flows.actionTypes,
     usage: "converly actions <destination_type>   (e.g. google-ads)",
+    flags: [],
     help: "The action config schema + example for one destination. Read this before building a flow's actions_config.",
   },
   "flows list": {
     run: flows.list,
     usage: "converly flows list [--site <site_id>] [--limit N]",
+    flags: ["site", "limit", "starting-after"],
     help: "List flows.",
   },
   "flows get": {
     run: flows.get,
     usage: "converly flows get <flow_id>",
+    flags: [],
     help: "Fetch one flow.",
   },
   "flows create": {
     run: flows.create,
-    usage: "converly flows create --site <id> --name <name> --trigger <slug> --destination <slug> [--conversion-id <id> | --event-name <name>] [--value N --currency USD] [--pages /a,/b] | --json '<body>'",
-    help: "Create a draft flow. Simple form covers one trigger + one destination; --json takes the full flow body for anything richer.",
+    usage: "converly flows create --site <id> --name <name> --trigger <slug> --destination <slug> [--conversion-id <id> | --event-name <name>] [--value N --currency USD] [--pages /a,/b] | --json '<body>'   (api trigger: --trigger api --key <webhook-key>, no --pages)",
+    flags: ["json", "site", "name", "description", "trigger", "key", "pages", "destination", "conversion-id", "event-name", "custom", "value", "currency", "enhanced"],
+    help: "Create a draft flow. Simple form covers one trigger + one destination; --json takes the full flow body for anything richer. The api (webhook) trigger takes --key, the webhook identifier, instead of --pages.",
   },
   "flows update": {
     run: flows.update,
     usage: "converly flows update <flow_id> --json '{\"name\":\"...\"}'",
+    flags: ["json"],
     help: "Update flow fields. Never pass status here — use publish/unpublish.",
   },
   "flows delete": {
     run: flows.remove,
     usage: "converly flows delete <flow_id> --yes",
+    flags: ["yes"],
     help: "Delete a flow permanently. Requires --yes. Unpublish first if it's published.",
   },
   "flows validate": {
     run: flows.validate,
     usage: "converly flows validate <flow_id>",
+    flags: [],
     help: "Non-mutating publish-readiness check. Returns problems[] (blockers) and warnings[] (site not ready — e.g. domain missing).",
   },
   "flows publish": {
     run: flows.publish,
     usage: "converly flows publish <flow_id>",
+    flags: [],
     help: "Publish a flow live. Also returns warnings[] about site readiness.",
   },
   "flows unpublish": {
     run: flows.unpublish,
     usage: "converly flows unpublish <flow_id>",
+    flags: [],
     help: "Take a flow offline.",
   },
   "test-event": {
     run: flows.testEvent,
     usage: "converly test-event --flow <flow_id> [--action-id act-1] [--meta-code TEST123] [--reddit-id t2_xxx] [--tiktok-code TEST123] [--allow-real]",
+    flags: ["flow", "action-id", "action-json", "meta-code", "reddit-id", "tiktok-code", "allow-real"],
     help: "Fire a test conversion through a flow's action to the real ad platform. Defaults to the flow's first action. Sandbox codes come from each platform's test tools. Pass --meta-code (Meta Events Manager test events), --reddit-id (Reddit) or --tiktok-code (TikTok) to keep the test out of real data. Destinations with no sandbox mode (Google Ads, GA4, LinkedIn, ChatGPT Ads) require --allow-real, which reports a REAL conversion, so the user must explicitly agree first.",
   },
   "events list": {
     run: events.list,
     usage: "converly events list [--site <id>] [--flow <id>] [--email x@y.com] [--status completed|failed] [--since ISO] [--until ISO] [--limit N]",
+    flags: ["site", "flow", "email", "status", "since", "until", "limit"],
     help: "Recent conversion events (bounded snapshot, max 100 — narrow with filters, there is no paging).",
   },
   "events get": {
     run: events.get,
     usage: "converly events get <event_id>",
+    flags: [],
     help: "One event with per-destination delivery status and any pipeline notices.",
   },
   "rules list": {
     run: misc.rulesList,
     usage: "converly rules list",
+    flags: [],
     help: "List internal-traffic rules (submissions matching them are ignored).",
   },
   "rules create": {
     run: misc.rulesCreate,
     usage: "converly rules create --ip 1.2.3.4 | --cidr 10.0.0.0/24 | --email-pattern '*@yourcompany.com' [--description X]",
+    flags: ["ip", "cidr", "email-pattern", "description"],
     help: "Exclude the team's own traffic so testing doesn't pollute conversions.",
   },
   "subscription": {
     run: misc.subscription,
     usage: "converly subscription",
+    flags: [],
     help: "Plan, trial and billing state.",
   },
   "usage": {
     run: misc.usage,
     usage: "converly usage",
+    flags: [],
     help: "Current usage against plan limits.",
   },
   "api": {
     run: misc.api,
     usage: "converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1> [--json '<body>']",
+    flags: ["json"],
     help: "Raw API request for anything not covered by a named command. Write /flows, not /v1/flows.",
   },
 };
@@ -280,7 +337,7 @@ function commandHelp(name, def) {
 }
 
 /** Longest-prefix match of argv words against the registry. */
-function matchCommand(args) {
+export function matchCommand(args) {
   for (const wordCount of [2, 1]) {
     if (args.length >= wordCount) {
       const name = args.slice(0, wordCount).join(" ");
@@ -317,6 +374,36 @@ export async function main(argv) {
           error: {
             code: "unknown_command",
             message: `Unknown command: ${args.join(" ")}. Run \`converly help\`.`,
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // Strict flag check: a mistyped flag must fail loudly here, not
+  // silently vanish and change what the command does downstream.
+  const allowed = new Set([...match.def.flags, ...GLOBAL_FLAGS]);
+  const unknown = Object.keys(flags).filter((name) => !allowed.has(name));
+  if (unknown.length > 0) {
+    const globalList = [...GLOBAL_FLAGS].map((n) => `--${n}`).join(", ");
+    const valid =
+      match.def.flags.length > 0
+        ? `Valid flags for \`converly ${match.name}\` are ${match.def.flags
+            .map((n) => `--${n}`)
+            .join(", ")}, plus the global ${globalList}.`
+        : `\`converly ${match.name}\` takes no flags of its own, just the global ${globalList}.`;
+    process.stderr.write(
+      JSON.stringify(
+        {
+          error: {
+            code: "unknown_flag",
+            message: `Unknown flag${unknown.length > 1 ? "s" : ""}: ${unknown
+              .map((n) => `--${n}`)
+              .join(", ")}. ${valid}`,
           },
         },
         null,

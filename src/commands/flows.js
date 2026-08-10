@@ -57,6 +57,44 @@ function parseJsonFlag(value, flagName) {
 }
 
 /**
+ * Build the trigger config for the simple form. Form tool triggers
+ * filter by page; the api trigger is a server-side webhook, so it takes
+ * a --key (the webhook identifier) and no page filter. Exported so the
+ * validation rules are testable without a network.
+ */
+export function buildTriggerConfig(flags) {
+  if (flags.key !== undefined && flags.trigger !== "api") {
+    throw new Error(
+      "--key only applies to --trigger api. Form tool triggers filter by page, not by webhook key."
+    );
+  }
+  if (flags.trigger === "api") {
+    if (typeof flags.key !== "string" || flags.key === "") {
+      throw new Error(
+        "The api trigger needs --key, a webhook identifier you choose (letters, numbers, hyphens, underscores). The webhook URL and secret come from `converly triggers connect api --site <site_id>`."
+      );
+    }
+    if (flags.pages !== undefined) {
+      throw new Error(
+        "--pages does not apply to --trigger api. The webhook fires from the site's backend, so there is no page to filter on."
+      );
+    }
+    return { integrationId: "api", key: flags.key };
+  }
+  if (!flags.trigger) return undefined;
+  return flags.pages
+    ? {
+        integrationId: flags.trigger,
+        pageFilter: "specific",
+        pages: String(flags.pages)
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean),
+      }
+    : { integrationId: flags.trigger, pageFilter: "all" };
+}
+
+/**
  * Build the action config for the simple one-destination case.
  * Google Ads picks a conversion by --conversion-id; Meta / GA4 use
  * --event-name. Values nest inside `conversion` (the shape the
@@ -107,18 +145,8 @@ export async function create({ flags, origin }) {
     ...(flags.description !== undefined && { description: flags.description }),
   };
 
-  if (flags.trigger) {
-    body.trigger_config = flags.pages
-      ? {
-          integrationId: flags.trigger,
-          pageFilter: "specific",
-          pages: String(flags.pages)
-            .split(",")
-            .map((p) => p.trim())
-            .filter(Boolean),
-        }
-      : { integrationId: flags.trigger, pageFilter: "all" };
-  }
+  const triggerConfig = buildTriggerConfig(flags);
+  if (triggerConfig) body.trigger_config = triggerConfig;
 
   if (flags.destination) {
     body.actions_config = [

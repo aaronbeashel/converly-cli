@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
-import { parseArgv } from "../src/main.js";
+import { parseArgv, matchCommand, main, COMMANDS } from "../src/main.js";
 import { normalizeOrigin } from "../src/config.js";
 import { makePkce, LOGIN_SCOPES } from "../src/oauth.js";
+import { create as flowsCreate, buildTriggerConfig } from "../src/commands/flows.js";
+import { connect as triggersConnect } from "../src/commands/triggers.js";
 
 test("parseArgv separates args and flags", () => {
   const { args, flags } = parseArgv([
@@ -116,6 +118,111 @@ test("escapeHtml neutralizes markup in reflected values", async () => {
     escapeHtml('<script>alert("x")</script>'),
     "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
   );
+});
+
+test("every command declares its flags for the strict parser", () => {
+  for (const [name, def] of Object.entries(COMMANDS)) {
+    assert.ok(Array.isArray(def.flags), `${name} is missing a flags array`);
+  }
+});
+
+test("main rejects unknown flags with one JSON error naming them all", async () => {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(chunk);
+    return true;
+  };
+  try {
+    await main(["sites", "list", "--limt", "5", "--bogus"]);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(process.exitCode, 1);
+  process.exitCode = 0; // don't let the intentional failure fail the suite
+  const payload = JSON.parse(chunks.join(""));
+  assert.equal(payload.error.code, "unknown_flag");
+  // Both unknowns named in the one error, and the fix taught alongside.
+  assert.match(payload.error.message, /--limt/);
+  assert.match(payload.error.message, /--bogus/);
+  assert.match(payload.error.message, /--limit/);
+  assert.match(payload.error.message, /--staging/);
+});
+
+test("two-word commands win over their one-word prefix", () => {
+  // `triggers connect` must not fall through to the `triggers` catalogue.
+  const two = matchCommand(["triggers", "connect", "acuity"]);
+  assert.equal(two.name, "triggers connect");
+  assert.deepEqual(two.rest, ["acuity"]);
+  const one = matchCommand(["triggers"]);
+  assert.equal(one.name, "triggers");
+});
+
+test("triggers connect validates source and --site before any request", async () => {
+  const origin = "https://app.converly.io";
+  await assert.rejects(
+    triggersConnect({ args: [], flags: {}, origin }),
+    /Missing trigger source/
+  );
+  await assert.rejects(
+    triggersConnect({ args: ["api"], flags: {}, origin }),
+    /Missing --site/
+  );
+});
+
+test("flows create: --trigger api without --key rejects with the fix", async () => {
+  await assert.rejects(
+    flowsCreate({
+      flags: { site: "site_x", name: "Signups", trigger: "api" },
+      origin: "https://app.converly.io",
+    }),
+    /needs --key.*triggers connect api/s
+  );
+});
+
+test("flows create: --key without --trigger api rejects", async () => {
+  const origin = "https://app.converly.io";
+  await assert.rejects(
+    flowsCreate({
+      flags: { site: "site_x", name: "Signups", trigger: "generic-form", key: "main-signup" },
+      origin,
+    }),
+    /--key only applies to --trigger api/
+  );
+  await assert.rejects(
+    flowsCreate({
+      flags: { site: "site_x", name: "Signups", key: "main-signup" },
+      origin,
+    }),
+    /--key only applies to --trigger api/
+  );
+});
+
+test("flows create: --pages with --trigger api rejects", async () => {
+  await assert.rejects(
+    flowsCreate({
+      flags: { site: "site_x", name: "Signups", trigger: "api", key: "main-signup", pages: "/thanks" },
+      origin: "https://app.converly.io",
+    }),
+    /--pages does not apply/
+  );
+});
+
+test("buildTriggerConfig: api trigger carries key and no pageFilter", () => {
+  assert.deepEqual(buildTriggerConfig({ trigger: "api", key: "main-signup" }), {
+    integrationId: "api",
+    key: "main-signup",
+  });
+  // Form tool triggers keep the existing pageFilter shapes.
+  assert.deepEqual(buildTriggerConfig({ trigger: "generic-form" }), {
+    integrationId: "generic-form",
+    pageFilter: "all",
+  });
+  assert.deepEqual(buildTriggerConfig({ trigger: "typeform", pages: "/a, /b" }), {
+    integrationId: "typeform",
+    pageFilter: "specific",
+    pages: ["/a", "/b"],
+  });
 });
 
 test("CONVERLY_API_KEY is only offered to trusted origins", async () => {
