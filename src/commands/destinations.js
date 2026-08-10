@@ -98,14 +98,27 @@ export async function handoffWait({ args, flags, origin }) {
   const isTransient = (err) =>
     !(err instanceof ApiError) || err.status >= 500 || err.status === 429;
 
-  let handoff = await apiRequest(origin, "GET", `/handoffs/${args[0]}`);
-  while (handoff.status === "pending" && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  // Every fetch — including the first — sits inside the tolerant loop: a
+  // watcher that dies on a platform blip while a human is mid-OAuth is
+  // worse than useless.
+  let handoff = null;
+  let lastTransientError = null;
+  while (Date.now() < deadline) {
     try {
       handoff = await apiRequest(origin, "GET", `/handoffs/${args[0]}`);
+      lastTransientError = null;
+      if (handoff.status !== "pending") break;
     } catch (err) {
       if (!isTransient(err)) throw err;
+      lastTransientError = err;
     }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (!handoff) {
+    throw (
+      lastTransientError ??
+      new Error(`Could not reach ${origin} to check the handoff.`)
+    );
   }
 
   if (handoff.status === "completed") return handoff;
