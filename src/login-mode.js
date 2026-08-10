@@ -61,3 +61,13 @@ export function resolveLoginMode(
 
   return headless ? "device_auto" : "loopback";
 }
+
+/**
+ * Whether the loopback flow should suppress the browser launch. `--no-open`
+ * asks for that, but `--browser` ("use the local browser") overrides it —
+ * otherwise `--browser --no-open` picks loopback yet never opens, which is
+ * contradictory (Codex round 2/3).
+ */
+export function shouldSuppressBrowserOpen(flags) {
+  return Boolean(flags["no-open"]) && !flags.browser;
+}

@@ -71,7 +71,7 @@ export async function deviceLoginFlow({ origin, label, progress = () => {} }) {
   // TTL left a window where the page could mint a key nobody was polling
   // for.)
   const serverDeadline = expires_at ? new Date(expires_at).getTime() : NaN;
-  const deadline = Number.isFinite(serverDeadline)
+  let deadline = Number.isFinite(serverDeadline)
     ? serverDeadline
     : Date.now() + POLL_TIMEOUT_MS;
 
@@ -86,7 +86,17 @@ export async function deviceLoginFlow({ origin, label, progress = () => {} }) {
       continue; // transient — keep polling until the deadline
     }
     const status = poll.parsed?.status;
-    if (status === "pending") continue;
+    if (status === "pending") {
+      // The approval claim can EXTEND the server expiry (GREATEST) so a
+      // near-deadline approval has time to settle the trial + mint. Track
+      // the current expires_at so the CLI never stops listening while the
+      // code is still completable (Codex round 3).
+      const t = poll.parsed?.expires_at
+        ? new Date(poll.parsed.expires_at).getTime()
+        : NaN;
+      if (Number.isFinite(t) && t > deadline) deadline = t;
+      continue;
+    }
     if (status === "denied") {
       throw new Error("The login was declined in the browser.");
     }

@@ -9,7 +9,7 @@ import {
 } from "../config.js";
 import { loginFlow } from "../oauth.js";
 import { deviceLoginFlow } from "../device-login.js";
-import { resolveLoginMode } from "../login-mode.js";
+import { resolveLoginMode, shouldSuppressBrowserOpen } from "../login-mode.js";
 import { apiRequest } from "../http.js";
 
 export async function login({ flags, origin }) {
@@ -36,11 +36,8 @@ export async function login({ flags, origin }) {
   const result = await loginFlow({
     origin,
     signup: Boolean(flags.signup),
-    // --browser means "use the local browser", so it forces the launch
-    // and overrides --no-open when both are given (Codex round 2). Without
-    // this, `--browser --no-open` picks loopback yet suppresses the open —
-    // contradictory.
-    noOpen: Boolean(flags["no-open"]) && !flags.browser,
+    // --browser overrides --no-open (see shouldSuppressBrowserOpen).
+    noOpen: shouldSuppressBrowserOpen(flags),
     progress,
   });
   return { ok: true, ...result };

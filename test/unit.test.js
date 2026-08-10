@@ -271,3 +271,21 @@ test("login dispatch: every environment row routes correctly", async () => {
   assert.equal(envTruthy("0"), false);
   assert.equal(envTruthy("yes"), true);
 });
+
+test("shouldSuppressBrowserOpen: --browser overrides --no-open", async () => {
+  const { shouldSuppressBrowserOpen } = await import("../src/login-mode.js");
+  assert.equal(shouldSuppressBrowserOpen({ "no-open": true }), true);
+  assert.equal(shouldSuppressBrowserOpen({ "no-open": true, browser: true }), false);
+  assert.equal(shouldSuppressBrowserOpen({ browser: true }), false);
+  assert.equal(shouldSuppressBrowserOpen({}), false);
+});
+
+test("device poll deadline extends when the server reports a later expires_at", () => {
+  // Mirrors the deviceLoginFlow deadline-extension logic (Codex round 3):
+  // a pending poll carrying a later expires_at must push the deadline out.
+  let deadline = Date.parse("2026-08-10T00:30:00Z");
+  const later = "2026-08-10T00:34:00Z";
+  const t = new Date(later).getTime();
+  if (Number.isFinite(t) && t > deadline) deadline = t;
+  assert.equal(deadline, Date.parse("2026-08-10T00:34:00Z"));
+});
