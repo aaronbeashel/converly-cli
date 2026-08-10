@@ -8,7 +8,7 @@
  * (the handoff URL), never passed through an agent or a shell history.
  */
 
-import { apiRequest } from "../http.js";
+import { ApiError, apiRequest } from "../http.js";
 
 /** `google-ads` → `dest_google-ads`; accepts either form. */
 function destId(value, commandHint) {
@@ -92,10 +92,20 @@ export async function handoffWait({ args, flags, origin }) {
   const intervalMs = 4000;
   const deadline = Date.now() + timeoutSeconds * 1000;
 
+  // A permanent client error (bad id, revoked auth) should fail fast; a
+  // transient one (request timeout, 5xx, 429) must NOT abort a wait on a
+  // half-finished human OAuth step — keep polling until the deadline.
+  const isTransient = (err) =>
+    !(err instanceof ApiError) || err.status >= 500 || err.status === 429;
+
   let handoff = await apiRequest(origin, "GET", `/handoffs/${args[0]}`);
   while (handoff.status === "pending" && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    handoff = await apiRequest(origin, "GET", `/handoffs/${args[0]}`);
+    try {
+      handoff = await apiRequest(origin, "GET", `/handoffs/${args[0]}`);
+    } catch (err) {
+      if (!isTransient(err)) throw err;
+    }
   }
 
   if (handoff.status === "completed") return handoff;
