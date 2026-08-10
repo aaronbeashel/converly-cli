@@ -217,7 +217,7 @@ export const COMMANDS = {
     run: flows.create,
     usage: "converly flows create --site <id> --name <name> --trigger <slug> --destination <slug> [--conversion-id <id> | --event-name <name>] [--value N --currency USD] [--pages /a,/b] | --json '<body>'   (api trigger: --trigger api --key <webhook-key>, no --pages)",
     flags: ["json", "site", "name", "description", "trigger", "key", "pages", "destination", "conversion-id", "event-name", "custom", "value", "currency", "enhanced"],
-    help: "Create a draft flow. Simple form covers one trigger + one destination; --json takes the full flow body for anything richer. The api (webhook) trigger takes --key, the webhook identifier, instead of --pages.",
+    help: "Create a draft flow. Simple form covers one trigger + one destination; --json takes the full flow body for anything richer. --pages is OPTIONAL: omit it and the form trigger fires on every page (the common case); pass it to restrict to specific paths, e.g. --pages /contact,/demo. No filter is required. The api (webhook) trigger takes --key, the webhook identifier, instead of --pages.",
   },
   "flows update": {
     run: flows.update,

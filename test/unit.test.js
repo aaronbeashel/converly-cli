@@ -5,7 +5,11 @@ import crypto from "node:crypto";
 import { parseArgv, matchCommand, main, COMMANDS } from "../src/main.js";
 import { normalizeOrigin } from "../src/config.js";
 import { makePkce, LOGIN_SCOPES } from "../src/oauth.js";
-import { create as flowsCreate, buildTriggerConfig } from "../src/commands/flows.js";
+import {
+  create as flowsCreate,
+  buildTriggerConfig,
+  toAgentTriggerCatalogue,
+} from "../src/commands/flows.js";
 import { connect as triggersConnect } from "../src/commands/triggers.js";
 
 test("parseArgv separates args and flags", () => {
@@ -288,4 +292,34 @@ test("device poll deadline extends when the server reports a later expires_at", 
   const t = new Date(later).getTime();
   if (Number.isFinite(t) && t > deadline) deadline = t;
   assert.equal(deadline, Date.parse("2026-08-10T00:34:00Z"));
+});
+
+test("toAgentTriggerCatalogue: strips designed filter schemas and custom_event", () => {
+  const raw = [
+    {
+      type: "form_submission",
+      name: "Form submission",
+      when_to_use: "…",
+      providers: ["generic-form"],
+      supports_filters: ["form_id", "form_selector", "page_path_filter"],
+      filters: [{ key: "form_id", type: "string", required: false, label: "Form ID" }],
+      at_least_one_filter_required: true,
+    },
+    { type: "custom_event", name: "Custom event", providers: [] },
+    { type: "meeting_booked", name: "Meeting booked", providers: ["acuity"] },
+  ];
+  const out = toAgentTriggerCatalogue(raw);
+  // custom_event is dropped entirely.
+  assert.deepEqual(
+    out.map((t) => t.type),
+    ["form_submission", "meeting_booked"]
+  );
+  // The three designed-filter fields never reach an agent.
+  const form = out.find((t) => t.type === "form_submission");
+  assert.equal("supports_filters" in form, false);
+  assert.equal("filters" in form, false);
+  assert.equal("at_least_one_filter_required" in form, false);
+  // Everything an agent legitimately needs survives.
+  assert.equal(form.when_to_use, "…");
+  assert.deepEqual(form.providers, ["generic-form"]);
 });

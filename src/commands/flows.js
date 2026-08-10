@@ -10,13 +10,39 @@ export async function triggerTypes({ flags, origin }) {
     query: { platform: flags.platform },
     public: true,
   });
-  // Mirror of the MCP agent-surface filter: custom_event is in the API
-  // catalogue but cannot be set up via this surface, so hide it before
-  // an agent tries to build (or invent) a flow around it.
   if (Array.isArray(result?.data)) {
-    result.data = result.data.filter((t) => t?.type !== "custom_event");
+    result.data = toAgentTriggerCatalogue(result.data);
   }
   return result;
+}
+
+/**
+ * Reshape the /v1 native-builder trigger catalogue into the honest
+ * agent-facing shape — the same one the MCP surface emits
+ * (src/app/mcp/route.ts builds it with omitFilterSchemas + agentSurface).
+ * /v1's /trigger-types serves the FULL catalogue, which carries two things
+ * an agent must not act on:
+ *   1. custom_event — a type that can't be set up through this surface.
+ *   2. the DESIGNED filter schemas (supports_filters / filters /
+ *      at_least_one_filter_required). A flow write here only honours the
+ *      trigger's page filter (`flows create --pages`). form_id /
+ *      form_selector / page_path_filter are not accepted, and the
+ *      "at least one filter required" flag is not enforced — a generic-form
+ *      flow with pageFilter:"all" and no pages is valid and publishable.
+ *      Leaving them in makes a careful agent stall on a requirement that
+ *      does not exist. Strip both to match MCP.
+ * Exported so the reshaping is testable without a network.
+ */
+export function toAgentTriggerCatalogue(data) {
+  return data
+    .filter((t) => t?.type !== "custom_event")
+    .map((t) => {
+      const clean = { ...t };
+      delete clean.supports_filters;
+      delete clean.filters;
+      delete clean.at_least_one_filter_required;
+      return clean;
+    });
 }
 
 export async function actionTypes({ args, origin }) {
