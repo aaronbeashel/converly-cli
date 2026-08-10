@@ -30,6 +30,7 @@ const BOOLEAN_FLAGS = new Set([
   "version",
   "no-open",
   "yes",
+  "allow-real",
 ]);
 
 export function parseArgv(argv) {
@@ -199,8 +200,8 @@ const COMMANDS = {
   },
   "test-event": {
     run: flows.testEvent,
-    usage: "converly test-event --flow <flow_id> [--action-id act-1] [--meta-code TEST123]",
-    help: "Fire a test conversion through a flow's action to the real ad platform. Defaults to the flow's first action.",
+    usage: "converly test-event --flow <flow_id> [--action-id act-1] [--meta-code TEST123] [--reddit-id t2_xxx] [--tiktok-code TEST123] [--allow-real]",
+    help: "Fire a test conversion through a flow's action to the real ad platform. Defaults to the flow's first action. Sandbox codes come from each platform's test tools. Pass --meta-code (Meta Events Manager test events), --reddit-id (Reddit) or --tiktok-code (TikTok) to keep the test out of real data. Destinations with no sandbox mode (Google Ads, GA4, LinkedIn, ChatGPT Ads) require --allow-real, which reports a REAL conversion, so the user must explicitly agree first.",
   },
   "events list": {
     run: events.list,

@@ -84,6 +84,21 @@ test("login scopes stay inside the server's registration ceiling", () => {
   }
 });
 
+test("parseArgv: --allow-real is boolean, --reddit-id takes a value", () => {
+  // --allow-real is followed by a non-flag token; only its BOOLEAN_FLAGS
+  // registration keeps it from swallowing "extra" as a value.
+  const { args, flags } = parseArgv([
+    "test-event",
+    "--allow-real",
+    "extra",
+    "--reddit-id",
+    "x",
+  ]);
+  assert.equal(flags["allow-real"], true);
+  assert.equal(flags["reddit-id"], "x");
+  assert.deepEqual(args, ["test-event", "extra"]);
+});
+
 test("parseArgv: --flag=false on a boolean flag means false", () => {
   const { flags } = parseArgv(["login", "--signup=false", "--staging=true"]);
   assert.equal(flags.signup, false);

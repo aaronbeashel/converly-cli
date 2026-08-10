@@ -6,10 +6,17 @@
 import { apiRequest } from "../http.js";
 
 export async function triggerTypes({ flags, origin }) {
-  return apiRequest(origin, "GET", "/trigger-types", {
+  const result = await apiRequest(origin, "GET", "/trigger-types", {
     query: { platform: flags.platform },
     public: true,
   });
+  // Mirror of the MCP agent-surface filter: custom_event is in the API
+  // catalogue but cannot be set up via this surface, so hide it before
+  // an agent tries to build (or invent) a flow around it.
+  if (Array.isArray(result?.data)) {
+    result.data = result.data.filter((t) => t?.type !== "custom_event");
+  }
+  return result;
 }
 
 export async function actionTypes({ args, origin }) {
@@ -203,6 +210,9 @@ export async function testEvent({ flags, origin }) {
         config: action.config ?? {},
       },
       ...(flags["meta-code"] && { meta_test_event_code: flags["meta-code"] }),
+      ...(flags["reddit-id"] && { reddit_test_id: flags["reddit-id"] }),
+      ...(flags["tiktok-code"] && { tiktok_test_event_code: flags["tiktok-code"] }),
+      ...(flags["allow-real"] && { allow_real_conversion: true }),
     },
   });
 }
