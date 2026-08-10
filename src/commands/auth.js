@@ -8,14 +8,27 @@ import {
   resolveAuth,
 } from "../config.js";
 import { loginFlow } from "../oauth.js";
+import { deviceLoginFlow } from "../device-login.js";
 import { apiRequest } from "../http.js";
 
 export async function login({ flags, origin }) {
+  const progress = (line) => process.stderr.write(`${line}\n`);
+  // --device: approve from any device (phone, another computer). The
+  // only path that works headless / on a remote box, where the loopback
+  // browser flow can't (browser and CLI must share a machine there).
+  if (flags.device) {
+    const result = await deviceLoginFlow({
+      origin,
+      label: typeof flags.label === "string" ? flags.label : undefined,
+      progress,
+    });
+    return { ok: true, ...result };
+  }
   const result = await loginFlow({
     origin,
     signup: Boolean(flags.signup),
     noOpen: Boolean(flags["no-open"]),
-    progress: (line) => process.stderr.write(`${line}\n`),
+    progress,
   });
   return { ok: true, ...result };
 }

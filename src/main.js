@@ -32,6 +32,7 @@ const BOOLEAN_FLAGS = new Set([
   "no-open",
   "yes",
   "allow-real",
+  "device",
 ]);
 
 export function parseArgv(argv) {
@@ -87,9 +88,9 @@ const GLOBAL_FLAGS = new Set([
 export const COMMANDS = {
   "login": {
     run: auth.login,
-    usage: "converly login [--signup] [--staging] [--no-open]",
-    flags: ["signup", "no-open"],
-    help: "Log in via a browser ON THIS MACHINE (the redirect hands the credential back to the CLI here — a phone or another computer can't complete it). --signup sends new users to account creation (free trial starts automatically). --no-open prints the URL without launching a browser. Credentials are stored in ~/.converly/config.json.",
+    usage: "converly login [--signup] [--device] [--staging] [--no-open]",
+    flags: ["signup", "no-open", "device", "label"],
+    help: "Log in. Default: opens a browser ON THIS MACHINE (the redirect hands the credential back here, so a phone or another computer can't complete it). --device instead shows a short code and a URL you approve from ANY device, which is the way to log in on a server, in CI, or from a headless agent. --signup sends new users to account creation (free trial starts automatically). --no-open prints the browser URL instead of launching it. --label names the device-login key shown in Settings. Credentials are stored in ~/.converly/config.json.",
   },
   "logout": {
     run: auth.logout,
