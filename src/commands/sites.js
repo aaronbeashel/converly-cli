@@ -7,6 +7,7 @@
  */
 
 import { apiRequest } from "../http.js";
+import { assertIdSegment } from "./ids.js";
 
 export async function list({ flags, origin }) {
   return apiRequest(origin, "GET", "/sites", {
@@ -18,7 +19,7 @@ export async function list({ flags, origin }) {
 }
 
 export async function get({ args, origin }) {
-  return apiRequest(origin, "GET", `/sites/${args[0]}`);
+  return apiRequest(origin, "GET", `/sites/${assertIdSegment(args[0], "site id")}`);
 }
 
 export async function create({ flags, origin }) {
@@ -41,14 +42,14 @@ export async function update({ args, flags, origin }) {
       "Nothing to update — pass at least one of --name, --domain, --timezone."
     );
   }
-  return apiRequest(origin, "PATCH", `/sites/${args[0]}`, { body });
+  return apiRequest(origin, "PATCH", `/sites/${assertIdSegment(args[0], "site id")}`, { body });
 }
 
 export async function snippet({ args, origin }) {
   const result = await apiRequest(
     origin,
     "GET",
-    `/sites/${args[0]}/install-snippet`
+    `/sites/${assertIdSegment(args[0], "site id")}/install-snippet`
   );
   // Retrieval is not installation — mirror the handoff commands'
   // next_step pattern so an agent knows the job isn't done yet.
@@ -69,7 +70,7 @@ export async function installStatus({ args, origin }) {
       "Usage: converly install status <site_id>   (get the id from `converly sites list`)"
     );
   }
-  return apiRequest(origin, "GET", `/sites/${args[0]}/install-status`);
+  return apiRequest(origin, "GET", `/sites/${assertIdSegment(args[0], "site id")}/install-status`);
 }
 
 /**
@@ -94,6 +95,7 @@ export async function status({ args, flags, origin }) {
       );
     }
   }
+  assertIdSegment(siteId, "site id");
   const result = await apiRequest(origin, "GET", `/sites/${siteId}/setup-status`);
   const commandFor = (item) => {
     const slug = item.integration;

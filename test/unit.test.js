@@ -1,9 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import http from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { parseArgv, matchCommand, main, COMMANDS } from "../src/main.js";
-import { normalizeOrigin } from "../src/config.js";
+import {
+  normalizeOrigin,
+  resolveOrigin,
+  isSameTrustedOrigin,
+  STAGING_ORIGIN,
+} from "../src/config.js";
+import { readTextCapped, assertSafePath } from "../src/net.js";
+import { assertIdSegment } from "../src/commands/ids.js";
 import { makePkce, LOGIN_SCOPES } from "../src/oauth.js";
 import {
   create as flowsCreate,
@@ -125,6 +136,378 @@ test("escapeHtml neutralizes markup in reflected values", async () => {
     escapeHtml('<script>alert("x")</script>'),
     "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
   );
+});
+
+// --- Strict boolean parsing (Codex round-3 blocker #6) ---
+
+test("parseArgv: a non-true/false value on a boolean flag is an error, not true", () => {
+  // The dangerous inversion: `--yes=flase` used to read as truthy → delete.
+  const a = parseArgv(["flows", "delete", "flow_x", "--yes=flase"]);
+  assert.equal(a.flags.yes, false, "unrecognised value defaults to SAFE false");
+  assert.deepEqual(a.invalidBooleanFlags, [{ name: "yes", value: "flase" }]);
+
+  const b = parseArgv(["test-event", "--allow-real=0"]);
+  assert.equal(b.flags["allow-real"], false);
+  assert.deepEqual(b.invalidBooleanFlags, [{ name: "allow-real", value: "0" }]);
+});
+
+test("parseArgv: exact true/false on a boolean flag is honoured, no error", () => {
+  const eq = parseArgv(["flows", "delete", "flow_x", "--yes=true"]);
+  assert.equal(eq.flags.yes, true);
+  assert.deepEqual(eq.invalidBooleanFlags, []);
+
+  const space = parseArgv(["flows", "delete", "flow_x", "--yes", "false"]);
+  assert.equal(space.flags.yes, false);
+  assert.deepEqual(space.invalidBooleanFlags, []);
+});
+
+test("main rejects a bad boolean value with invalid_flag_value (never deletes)", async () => {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(chunk);
+    return true;
+  };
+  try {
+    // If this ever reached the handler it would try to DELETE. It must not.
+    await main(["flows", "delete", "flow_x", "--yes=flase"]);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(process.exitCode, 1);
+  process.exitCode = 0;
+  const payload = JSON.parse(chunks.join(""));
+  assert.equal(payload.error.code, "invalid_flag_value");
+  assert.match(payload.error.message, /--yes=flase/);
+  assert.match(payload.error.message, /true or false/);
+});
+
+// --- Empty value = missing (Codex round-3 blocker #5) ---
+
+test('parseArgv: an explicit empty value counts as missing, not ""', () => {
+  const eq = parseArgv(["sites", "list", "--api="]);
+  assert.ok(eq.missingValueFlags.includes("api"));
+
+  const space = parseArgv(["sites", "list", "--api", ""]);
+  assert.ok(space.missingValueFlags.includes("api"));
+});
+
+test("main rejects an empty --api= as missing_flag_value (no prod fallthrough)", async () => {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(chunk);
+    return true;
+  };
+  try {
+    await main(["sites", "list", "--api="]);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(process.exitCode, 1);
+  process.exitCode = 0;
+  const payload = JSON.parse(chunks.join(""));
+  assert.equal(payload.error.code, "missing_flag_value");
+  assert.match(payload.error.message, /--api/);
+});
+
+// --- Deployment-selector safety (Codex round-3 blocker #4 + conflict) ---
+
+test("resolveOrigin refuses --api and --staging together", () => {
+  assert.throws(
+    () => resolveOrigin({ api: "https://x.example", staging: true }),
+    /not both/
+  );
+});
+
+// --- Same-origin trust boundary (Codex round-3 blockers #1, #10) ---
+
+test("isSameTrustedOrigin pins to exactly the chosen origin", () => {
+  const origin = "https://app.converly.io";
+  assert.equal(
+    isSameTrustedOrigin("https://app.converly.io/api/auth/token", origin),
+    true
+  );
+  // A different host — the refresh-token exfiltration path — is rejected.
+  assert.equal(isSameTrustedOrigin("https://attacker.example/token", origin), false);
+  // Same host but embedded credentials — rejected.
+  assert.equal(
+    isSameTrustedOrigin("https://user:pass@app.converly.io/x", origin),
+    false
+  );
+  // Different scheme is a different origin — rejected.
+  assert.equal(isSameTrustedOrigin("http://app.converly.io/x", origin), false);
+  assert.equal(isSameTrustedOrigin("not a url", origin), false);
+});
+
+// --- enhanced is now a strict boolean (Codex round-3 new blocker) ---
+
+test("parseArgv: --enhanced is a strict boolean, bad values rejected", () => {
+  const bad = parseArgv(["flows", "create", "--enhanced=flase"]);
+  assert.equal(bad.flags.enhanced, false);
+  assert.deepEqual(bad.invalidBooleanFlags, [{ name: "enhanced", value: "flase" }]);
+
+  const good = parseArgv(["flows", "create", "--enhanced"]);
+  assert.equal(good.flags.enhanced, true);
+  assert.deepEqual(good.invalidBooleanFlags, []);
+});
+
+// --- Central positional-arity guard (Codex round-3 new blocker) ---
+
+async function runMainCapture(argv) {
+  const chunks = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(chunk);
+    return true;
+  };
+  try {
+    await main(argv);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  const code = process.exitCode;
+  process.exitCode = 0;
+  return { code, payload: JSON.parse(chunks.join("")) };
+}
+
+test("main rejects a stray positional from a mistyped boolean on flows create", async () => {
+  // `--custom no` leaves "no" as a positional; flows create takes none.
+  const { code, payload } = await runMainCapture([
+    "flows",
+    "create",
+    "--site",
+    "s",
+    "--name",
+    "n",
+    "--custom",
+    "no",
+  ]);
+  assert.equal(code, 1);
+  assert.equal(payload.error.code, "unexpected_argument");
+  assert.match(payload.error.message, /"no"/);
+});
+
+test("main rejects too many positionals on a one-arg command", async () => {
+  const { code, payload } = await runMainCapture(["sites", "get", "s1", "s2"]);
+  assert.equal(code, 1);
+  assert.equal(payload.error.code, "unexpected_argument");
+  assert.match(payload.error.message, /"s2"/);
+});
+
+test("main allows the exact positional arity (api takes two)", async () => {
+  // Wrong here would be an unexpected_argument error; we assert it is NOT
+  // that (the request itself fails later on the bogus origin, which is
+  // fine — we only care the arity gate let two through).
+  const { payload } = await runMainCapture([
+    "api",
+    "GET",
+    "/flows",
+    "extra",
+    "--api",
+    "https://nonexistent.invalid",
+  ]);
+  assert.equal(payload.error.code, "unexpected_argument");
+  assert.match(payload.error.message, /"extra"/);
+});
+
+// --- Path-traversal guard on interpolated ids (Codex round-4 blocker) ---
+
+test("assertIdSegment allows only a plain id and rejects encoded traversal", () => {
+  assert.equal(assertIdSegment("flow_abc123", "flow id"), "flow_abc123");
+  assert.equal(assertIdSegment("google-ads", "type"), "google-ads");
+  for (const bad of [
+    "../flows/x",
+    "a/b",
+    "a\\b",
+    ".",
+    "..",
+    "a b",
+    "a?b",
+    "a#b",
+    "%2e%2e", // encoded ".."
+    "%2f", // encoded "/"
+    "%5c", // encoded "\"
+    "flow%2ex", // any percent-escape
+  ]) {
+    assert.throws(() => assertIdSegment(bad, "flow id"), /not a path|single id/);
+  }
+  assert.throws(() => assertIdSegment("", "flow id"), /Missing/);
+});
+
+test("main refuses a raw DELETE without --yes", async () => {
+  const { code, payload } = await runMainCapture([
+    "api",
+    "DELETE",
+    "/flows/flow_x",
+    "--api",
+    "https://x.example",
+  ]);
+  assert.equal(code, 1);
+  assert.match(payload.error.message, /--yes/);
+});
+
+test("assertSafePath rejects nested / normalized traversal", () => {
+  // Plain valid paths pass.
+  assertSafePath("/flows/flow_abc123");
+  assertSafePath("/sites/site_1/setup-status");
+  for (const bad of [
+    "/sites/../flows/x",
+    "/sites/%2e%2e/flows/x", // single-encoded ..
+    "/sites/%252e%252e/flows/x", // double-encoded ..
+    "/a/%2f/b", // encoded /
+    "/a/%5c/b", // encoded \
+    "/a/／/b", // fullwidth solidus → NFKC "/"
+  ]) {
+    assert.throws(() => assertSafePath(bad), /suspicious|Malformed|Over-encoded/);
+  }
+});
+
+test("assertSafePath rejects control-char traversal (URL strips tab/newline/CR)", () => {
+  // ".<TAB>." etc. become ".." once new URL() strips the control char.
+  for (const c of ["\t", "\n", "\r"]) {
+    assert.throws(
+      () => assertSafePath("/decoy/." + c + "./flows/x"),
+      /control character|suspicious/
+    );
+  }
+  // ...including the percent-encoded form.
+  assert.throws(() => assertSafePath("/a/.%09./b"), /control character|suspicious/);
+});
+
+test("resolveOrigin: an explicit --staging beats CONVERLY_API_URL", () => {
+  const prev = process.env.CONVERLY_API_URL;
+  process.env.CONVERLY_API_URL = "https://app.converly.io";
+  try {
+    // An explicit selector must not be silently overridden by the env, or
+    // `flows delete X --staging` could hit production.
+    assert.equal(resolveOrigin({ staging: true }), STAGING_ORIGIN);
+  } finally {
+    if (prev === undefined) delete process.env.CONVERLY_API_URL;
+    else process.env.CONVERLY_API_URL = prev;
+  }
+});
+
+test("a 429 stays retryable and surfaces retry timing", async () => {
+  const srv = http.createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      res.writeHead(429, {
+        "content-type": "application/json",
+        "retry-after": "30",
+      });
+      res.end(JSON.stringify({ error: { code: "rate_limited", message: "slow down" } }));
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const bin = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "bin",
+    "converly.js"
+  );
+  const child = spawn(
+    process.execPath,
+    [bin, "flows", "get", "flow_abc", "--api", `http://127.0.0.1:${port}`],
+    { env: { ...process.env, CONVERLY_API_KEY: "sk_live_dummy" } }
+  );
+  let err = "";
+  child.stderr.on("data", (d) => (err += d));
+  await new Promise((r) => child.on("close", r));
+  srv.close();
+  const p = JSON.parse(err).error;
+  assert.equal(p.status, 429);
+  assert.equal(p.retryable, true, "429 must stay retryable");
+  assert.equal(p.retry_after, "30");
+});
+
+test("a PATCH 5xx never surfaces retryable (outcome_uncertain instead)", async () => {
+  // The exact scenario: a structured 500 whose body claims retryable:true.
+  // A non-idempotent PATCH must NOT echo that to a machine consumer.
+  const srv = http.createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            code: "server_fault",
+            message: "failed after write",
+            retryable: true,
+            hint: "retry now",
+          },
+        })
+      );
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const bin = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "bin",
+    "converly.js"
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      bin,
+      "flows",
+      "update",
+      "flow_abc",
+      "--json",
+      '{"name":"x"}',
+      "--api",
+      `http://127.0.0.1:${port}`,
+    ],
+    { env: { ...process.env, CONVERLY_API_KEY: "sk_live_dummy" } }
+  );
+  let err = "";
+  child.stderr.on("data", (d) => (err += d));
+  const exitCode = await new Promise((r) => child.on("close", r));
+  srv.close();
+  assert.equal(exitCode, 1);
+  const p = JSON.parse(err).error;
+  assert.equal(p.status, 500);
+  assert.equal(p.outcome_uncertain, true, "PATCH ambiguity must be flagged");
+  assert.equal(p.retryable, undefined, "server's retryable must be stripped");
+  assert.match(p.hint, /check the current state/);
+});
+
+test("main refuses a traversal id on a destructive command (no request sent)", async () => {
+  const { code, payload } = await runMainCapture([
+    "flows",
+    "delete",
+    "../flows/other",
+    "--yes",
+    "--api",
+    "https://x.example",
+  ]);
+  assert.equal(code, 1);
+  assert.match(payload.error.message, /not a path/);
+});
+
+// --- Streaming response cap (Codex round-3 should-fix #8) ---
+
+test("readTextCapped rejects a body that overshoots the cap", async () => {
+  // A stream with NO content-length (the case a lying header can't cover):
+  // the reader must stop once accumulated bytes exceed the cap.
+  const big = "x".repeat(5000);
+  const overStream = new Response(
+    new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(big));
+        c.close();
+      },
+    })
+  );
+  const over = await readTextCapped(overStream, 1000);
+  assert.equal(over.overLimit, true);
+
+  const okRes = new Response("hello");
+  const ok = await readTextCapped(okRes, 1000);
+  assert.equal(ok.text, "hello");
 });
 
 test("every command declares its flags for the strict parser", () => {

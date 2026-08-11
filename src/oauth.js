@@ -33,7 +33,11 @@ import { spawn } from "node:child_process";
 import {
   getStoredCredentials,
   setStoredCredentials,
+  commitRefreshedCredentials,
+  withRefreshLock,
+  isSameTrustedOrigin,
 } from "./config.js";
+import { readTextCapped } from "./net.js";
 
 /** Scopes requested at login — must stay within the server's DCR ceiling. */
 export const LOGIN_SCOPES = [
@@ -60,7 +64,42 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
 
 function fetchWithTimeout(url, init = {}) {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  return fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    // These are all credential-bearing OAuth calls (discovery, DCR, token
+    // exchange, refresh). A 307/308 forwards the POST body (PKCE verifier /
+    // refresh token) to the redirect target — Node strips Authorization but
+    // NOT the body — so a malicious/misconfigured endpoint could exfiltrate
+    // it. None of these endpoints legitimately redirects, so refuse.
+    redirect: "error",
+  });
+}
+
+/** Cap a credential/metadata response so a hostile endpoint can't exhaust
+ *  memory. OAuth docs are tiny; 1 MB is already generous. */
+const OAUTH_MAX_BYTES = 1_000_000;
+async function readJsonCapped(res, maxBytes = OAUTH_MAX_BYTES) {
+  // Streaming cap so an absent/lying Content-Length can't exhaust memory.
+  const read = await readTextCapped(res, maxBytes);
+  if (read.overLimit) throw new Error("Response too large.");
+  if (read.unreadable) throw new Error("Could not read the response.");
+  try {
+    return JSON.parse(read.text);
+  } catch {
+    // Clean, consistent error for the one caller (discover) that doesn't
+    // wrap this in .catch — a raw SyntaxError would leak as an ugly crash.
+    throw new Error("Response was not valid JSON.");
+  }
+}
+
+/** Constant-time string compare (equal-length first). */
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
 }
 
 function b64url(buf) {
@@ -97,14 +136,29 @@ export async function discover(origin) {
       `Could not load OAuth configuration from ${origin} (HTTP ${res.status}).`
     );
   }
-  const doc = await res.json();
+  const doc = await readJsonCapped(res);
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    throw new Error("OAuth discovery document was not a JSON object.");
+  }
   for (const field of [
     "authorization_endpoint",
     "token_endpoint",
     "registration_endpoint",
   ]) {
-    if (!doc[field]) {
+    if (typeof doc[field] !== "string" || !doc[field]) {
       throw new Error(`OAuth discovery document is missing ${field}.`);
+    }
+    // CRITICAL trust boundary: every endpoint the discovery doc names must
+    // live on the SAME origin we chose. Otherwise a compromised/hostile
+    // origin could point token_endpoint at attacker.example and the CLI
+    // would POST the refresh token / PKCE verifier straight to it.
+    // redirect:"error" does NOT help here — this is the primary URL, not a
+    // redirect. Metadata must never widen the trust boundary.
+    if (!isSameTrustedOrigin(doc[field], origin)) {
+      throw new Error(
+        `OAuth ${field} (${doc[field]}) is not on ${origin}. ` +
+          `Refusing to send credentials to a different host than the one you selected.`
+      );
     }
   }
   return doc;
@@ -123,8 +177,8 @@ async function registerClient(registrationEndpoint, redirectUri) {
       scope: LOGIN_SCOPES,
     }),
   });
-  const body = await res.json().catch(() => null);
-  if (!res.ok || !body?.client_id) {
+  const body = await readJsonCapped(res).catch(() => null);
+  if (!res.ok || typeof body?.client_id !== "string" || !body.client_id.trim()) {
     const detail = body?.error_description ?? body?.error ?? `HTTP ${res.status}`;
     throw new Error(`Client registration failed: ${detail}`);
   }
@@ -143,9 +197,12 @@ export function openBrowser(url) {
         ? { command: "rundll32", args: ["url.dll,FileProtocolHandler", url] }
         : { command: "xdg-open", args: [url] };
   try {
+    const childEnv = { ...process.env };
+    delete childEnv.CONVERLY_API_KEY;
     const child = spawn(launcher.command, launcher.args, {
       stdio: "ignore",
       detached: true,
+      env: childEnv,
     });
     child.on("error", () => {});
     child.unref();
@@ -177,7 +234,10 @@ const RETURN_PAGE = page(
  */
 function waitForCallback(server, expectedState) {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       reject(
         new Error(
           "Timed out waiting for the browser login (10 minutes). Run `converly login` again when you're ready."
@@ -186,16 +246,33 @@ function waitForCallback(server, expectedState) {
     }, LOGIN_TIMEOUT_MS);
 
     server.on("request", (req, res) => {
-      const url = new URL(req.url, "http://127.0.0.1");
-      // State is validated FIRST: only our own redirect gets any further.
+      // Once we've resolved/rejected, ignore any further hits on the port.
+      if (settled) {
+        res.writeHead(409).end();
+        return;
+      }
+      // A malformed request target makes `new URL` throw — inside this
+      // event callback that would be an uncaught crash, not a clean error.
+      let url;
+      try {
+        url = new URL(req.url, "http://127.0.0.1");
+      } catch {
+        res.writeHead(400).end();
+        return;
+      }
+      // Only GET /callback with OUR state gets any further; state is
+      // compared constant-time. Everything else (probes, favicons, other
+      // apps on the port) gets a 404 and cannot cancel or complete login.
       if (
+        req.method !== "GET" ||
         url.pathname !== "/callback" ||
-        url.searchParams.get("state") !== expectedState
+        !safeEqual(url.searchParams.get("state") ?? "", expectedState)
       ) {
         res.writeHead(404).end();
         return;
       }
       const finish = (html, outcome) => {
+        settled = true;
         res
           .writeHead(200, {
             "Content-Type": "text/html; charset=utf-8",
@@ -235,10 +312,32 @@ async function exchangeToken(tokenEndpoint, params) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params).toString(),
   });
-  const body = await res.json().catch(() => null);
-  if (!res.ok || !body?.access_token) {
+  const body = await readJsonCapped(res).catch(() => null);
+  if (!res.ok || typeof body?.access_token !== "string" || !body.access_token.trim()) {
     const detail = body?.error_description ?? body?.error ?? `HTTP ${res.status}`;
     throw new Error(`Token request failed: ${detail}`);
+  }
+  // Validate the optional fields BEFORE they can be persisted — a
+  // non-string refresh_token / scope would later be sent back to the
+  // server or stored as junk, and a non-number expires_in would corrupt
+  // the expiry math.
+  if (
+    body.refresh_token !== undefined &&
+    body.refresh_token !== null &&
+    typeof body.refresh_token !== "string"
+  ) {
+    throw new Error("Token response had a non-string refresh_token.");
+  }
+  if (body.scope !== undefined && typeof body.scope !== "string") {
+    throw new Error("Token response had a non-string scope.");
+  }
+  if (
+    body.expires_in !== undefined &&
+    (typeof body.expires_in !== "number" ||
+      !Number.isFinite(body.expires_in) ||
+      body.expires_in < 0)
+  ) {
+    throw new Error("Token response had an invalid expires_in.");
   }
   return body;
 }
@@ -318,6 +417,11 @@ export async function loginFlow({
       code_verifier: verifier,
     });
     const creds = credsFromTokens(clientId, tokens, LOGIN_SCOPES);
+    // Tag this login session. A refresh preserves the generation; a NEW
+    // login (possibly a different account) gets a new one. In-flight
+    // requests compare it before replaying so a concurrent login can't make
+    // a write replay under a different account's token.
+    creds.login_generation = b64url(crypto.randomBytes(8));
     // A deliberate login selects this origin as the default deployment.
     setStoredCredentials(origin, creds, { makeDefault: true });
     return {
@@ -331,37 +435,73 @@ export async function loginFlow({
   }
 }
 
-// One in-flight refresh per origin. Concurrent 401s (parallel requests
-// after expiry) must not race each other: with refresh-token rotation,
-// the second refresh attempt would use a consumed token and fail.
+// One in-flight refresh per origin WITHIN this process. Concurrent 401s
+// (parallel requests after expiry) collapse to a single refresh here; the
+// cross-process refresh LOCK (withRefreshLock) handles other processes.
 const refreshInFlight = new Map();
 
 /**
- * Refresh the stored token for an origin. Returns the new credentials,
- * or throws if there is nothing to refresh / the server refuses.
+ * Refresh the stored token for an origin. Returns the credentials to use
+ * (freshly refreshed, or another process's if it beat us), or throws if
+ * there's nothing to refresh / the server refuses.
+ *
+ * `opts.rejectedToken` is the access token that just got a 401; if, after
+ * taking the cross-process lock, the stored access token is no longer that
+ * value, another process already refreshed — we adopt its result instead
+ * of refreshing again (which could trip refresh-token reuse revocation).
  */
-export function refreshCredentials(origin) {
+export function refreshCredentials(origin, opts = {}) {
   const existing = refreshInFlight.get(origin);
   if (existing) return existing;
 
-  const task = (async () => {
-    const stored = getStoredCredentials(origin);
-    if (!stored?.refresh_token || !stored?.client_id) {
+  const task = withRefreshLock(async () => {
+    // Re-read AFTER acquiring the cross-process lock.
+    const current = getStoredCredentials(origin);
+    if (!current?.access_token) {
+      throw new Error(`No login for ${origin} to refresh.`);
+    }
+    // Another process refreshed while we waited — use its token, don't
+    // burn ours on a second (reuse-detectable) refresh.
+    if (opts.rejectedToken && current.access_token !== opts.rejectedToken) {
+      return current;
+    }
+    if (!current.refresh_token || !current.client_id) {
       throw new Error(`No refreshable login for ${origin}.`);
     }
+    const usedRefreshToken = current.refresh_token;
+    // The full credential this refresh is based on — the CAS requires ALL
+    // of these to be unchanged at commit time (login_generation included,
+    // so a concurrent login is caught even in the impossible case it kept
+    // the same tokens).
+    const expected = {
+      access_token: current.access_token,
+      refresh_token: usedRefreshToken,
+      client_id: current.client_id,
+      login_generation: current.login_generation ?? null,
+    };
     const doc = await discover(origin);
     const tokens = await exchangeToken(doc.token_endpoint, {
       grant_type: "refresh_token",
-      refresh_token: stored.refresh_token,
-      client_id: stored.client_id,
+      refresh_token: usedRefreshToken,
+      client_id: current.client_id,
     });
     // Some servers rotate refresh tokens; keep the old one if none returned.
-    if (!tokens.refresh_token) tokens.refresh_token = stored.refresh_token;
-    const creds = credsFromTokens(stored.client_id, tokens, stored.scope);
-    // A background refresh must not change which deployment is default.
-    setStoredCredentials(origin, creds, { makeDefault: false });
-    return creds;
-  })().finally(() => refreshInFlight.delete(origin));
+    if (!tokens.refresh_token) tokens.refresh_token = usedRefreshToken;
+    const creds = credsFromTokens(current.client_id, tokens, current.scope);
+    // A refresh stays within the SAME login session — carry the generation
+    // forward EXACTLY, including its ABSENCE for a legacy credential. (Do
+    // NOT mint a new one here: a normal legacy refresh would then differ
+    // from the null start-generation and be wrongly rejected as a login
+    // change. A real concurrent login stamps a non-null generation, which
+    // the null-normalized comparison in http.js still catches.)
+    creds.login_generation = current.login_generation;
+    // Compare-and-swap commit: don't resurrect a credential a logout
+    // cleared, and don't clobber a newer one a login/refresh just wrote.
+    const result = commitRefreshedCredentials(origin, creds, expected);
+    if (result.ok) return creds;
+    if (result.current?.access_token) return result.current;
+    throw new Error(`Login for ${origin} was cleared during refresh.`);
+  }).finally(() => refreshInFlight.delete(origin));
 
   refreshInFlight.set(origin, task);
   return task;

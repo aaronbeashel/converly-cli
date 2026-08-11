@@ -4,6 +4,7 @@
  */
 
 import { apiRequest } from "../http.js";
+import { assertIdSegment } from "./ids.js";
 
 export async function triggerTypes({ flags, origin }) {
   const result = await apiRequest(origin, "GET", "/trigger-types", {
@@ -67,7 +68,19 @@ export async function list({ flags, origin }) {
 
 function requireFlowId(args, usage) {
   if (!args[0]) throw new Error(`Usage: ${usage}`);
-  return args[0];
+  // Reject stray extra positionals. This is what stops a mis-typed boolean
+  // like `flows delete flow_x --yes no` from deleting: the "no" lands as a
+  // second positional (bare --yes stays true), and silently dropping it
+  // would run the destructive command anyway.
+  if (args.length > 1) {
+    throw new Error(
+      `Unexpected extra argument${args.length > 2 ? "s" : ""}: ` +
+        `${args.slice(1).map((a) => JSON.stringify(a)).join(", ")}. Usage: ${usage}`
+    );
+  }
+  // A flow id is a single path segment — never a path (guards traversal
+  // like `flows delete ../flows/other`).
+  return assertIdSegment(args[0], "flow id");
 }
 
 export async function get({ args, origin }) {
@@ -147,7 +160,9 @@ function buildActionConfig(flags) {
   const config = {};
   if (Object.keys(conversion).length > 0) config.conversion = conversion;
   if (flags.enhanced !== undefined) {
-    config.enhancedConversions = flags.enhanced !== "false";
+    // `enhanced` is a strict boolean flag now, so flags.enhanced is a real
+    // boolean (bare `--enhanced` → true, `--enhanced=false` → false).
+    config.enhancedConversions = flags.enhanced === true;
   }
   return config;
 }
@@ -222,10 +237,22 @@ export async function unpublish({ args, origin }) {
   return apiRequest(origin, "POST", `/flows/${requireFlowId(args, "converly flows unpublish <flow_id>")}/unpublish`);
 }
 
-export async function testEvent({ flags, origin }) {
+export async function testEvent({ args, flags, origin }) {
+  // No positionals — the flow is named with --flow. A stray positional
+  // usually means a boolean was mis-typed (e.g. `--allow-real 0` leaves
+  // "0" here while --allow-real stays true), so refuse rather than fire a
+  // real conversion off a misread command.
+  if (args && args.length > 0) {
+    throw new Error(
+      `test-event takes no positional arguments (got ` +
+        `${args.map((a) => JSON.stringify(a)).join(", ")}). ` +
+        `Name the flow with --flow <flow_id>.`
+    );
+  }
   if (!flags.flow) {
     throw new Error("Missing --flow <flow_id>.");
   }
+  assertIdSegment(flags.flow, "flow id");
 
   let action;
   if (flags["action-id"] || flags["action-json"]) {

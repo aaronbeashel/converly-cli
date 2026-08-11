@@ -10,7 +10,7 @@ Converly tracks form submissions on your website and fires conversion events to 
 npm install -g converly
 ```
 
-Requires Node 18.17+.
+Requires Node 20 or newer.
 
 ## Log in
 

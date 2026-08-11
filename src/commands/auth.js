@@ -57,16 +57,26 @@ export async function whoami({ origin }) {
     query: { limit: 100 },
   });
   const stored = auth?.source === "stored" ? getStoredCredentials(origin) : null;
+  const siteRows = Array.isArray(sites?.data) ? sites.data : [];
   return {
     origin,
     auth_source: auth?.source ?? null,
     scope: stored?.scope ?? null,
     subscription,
-    sites: (sites?.data ?? []).map((s) => ({
+    sites: siteRows.map((s) => ({
       id: s.id,
       name: s.name,
       domain: s.domain,
       site_key: s.site_key,
     })),
+    // Don't imply this is every site when the account has more than the
+    // page we fetched — say so plainly and point at the paged command.
+    ...(sites?.has_more
+      ? {
+          sites_truncated: true,
+          sites_note:
+            "Showing the first 100 sites. Run `converly sites list` to page through the rest.",
+        }
+      : {}),
   };
 }

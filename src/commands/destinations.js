@@ -9,6 +9,7 @@
  */
 
 import { ApiError, apiRequest } from "../http.js";
+import { assertIdSegment } from "./ids.js";
 
 /** `google-ads` → `dest_google-ads`; accepts either form. */
 function destId(value, commandHint) {
@@ -17,6 +18,8 @@ function destId(value, commandHint) {
       `Missing destination type. ${commandHint} (run \`converly destinations types\` for the list).`
     );
   }
+  // A destination type is a single segment, interpolated into the path.
+  assertIdSegment(value, "destination type");
   return value.startsWith("dest_") ? value : `dest_${value}`;
 }
 
@@ -95,7 +98,8 @@ function guardHandoffId(id, usage) {
         "be revived from their URL."
     );
   }
-  return id;
+  // Single path segment — never a path (guards traversal via a crafted id).
+  return assertIdSegment(id, "handoff id");
 }
 
 export async function handoffGet({ args, origin }) {
@@ -105,18 +109,26 @@ export async function handoffGet({ args, origin }) {
 
 export async function handoffWait({ args, flags, origin }) {
   guardHandoffId(args[0], "converly handoffs wait <handoff_id>");
-  const timeoutSeconds = Number(flags.timeout ?? 600);
+  // Ceiling so a huge (or `1e306`, which multiplies to Infinity) --timeout
+  // can't turn `Date.now() < deadline` into a loop that never ends.
+  const MAX_TIMEOUT_SECONDS = 3600;
+  let timeoutSeconds = Number(flags.timeout ?? 600);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new Error("--timeout must be a positive number of seconds.");
   }
+  timeoutSeconds = Math.min(timeoutSeconds, MAX_TIMEOUT_SECONDS);
   const intervalMs = 4000;
   const deadline = Date.now() + timeoutSeconds * 1000;
 
-  // A permanent client error (bad id, revoked auth) should fail fast; a
-  // transient one (request timeout, 5xx, 429) must NOT abort a wait on a
-  // half-finished human OAuth step — keep polling until the deadline.
+  // Retry ONLY genuinely transient failures: a 5xx/429 API error, or a
+  // transport-level error the HTTP client explicitly marked `retryable`
+  // (timeout, connection reset, body-read failure). Everything else — a
+  // 4xx (bad id, revoked auth), a missing login, a refused off-origin
+  // call, a programming error — is permanent and must abort at once rather
+  // than be hammered for the full window.
   const isTransient = (err) =>
-    !(err instanceof ApiError) || err.status >= 500 || err.status === 429;
+    (err instanceof ApiError && (err.status >= 500 || err.status === 429)) ||
+    err?.retryable === true;
 
   // Every fetch — including the first — sits inside the tolerant loop: a
   // watcher that dies on a platform blip while a human is mid-OAuth is

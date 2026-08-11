@@ -27,6 +27,7 @@ const BOOLEAN_FLAGS = new Set([
   "signup",
   "refresh",
   "custom",
+  "enhanced",
   "help",
   "version",
   "no-open",
@@ -36,9 +37,26 @@ const BOOLEAN_FLAGS = new Set([
   "browser",
 ]);
 
+// Explicit boolean values are accepted ONLY as the exact words true/false
+// (case-insensitive). Anything else — `flase`, `0`, `no` — must be an
+// error, never a silent coercion, because these flags include destructive
+// ones (`--yes` deletes, `--allow-real` fires a real conversion).
+function parseBoolStrict(value) {
+  const v = String(value).toLowerCase();
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return undefined;
+}
+
 export function parseArgv(argv) {
   const args = [];
   const flags = {};
+  // Value-taking flags that were given no value (next token missing or
+  // another flag). main() turns these into a clean error rather than
+  // letting them default to a surprising `true`.
+  const missingValueFlags = [];
+  // Boolean flags given a value that isn't exactly true/false.
+  const invalidBooleanFlags = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token.startsWith("--")) {
@@ -46,13 +64,52 @@ export function parseArgv(argv) {
       if (eq !== -1) {
         const name = token.slice(2, eq);
         const value = token.slice(eq + 1);
-        // `--signup=false` must mean false, not truthy-string true.
-        flags[name] = BOOLEAN_FLAGS.has(name) ? value !== "false" : value;
+        if (BOOLEAN_FLAGS.has(name)) {
+          // `--signup=false` → false; `--yes=flase` / `--allow-real=0` are
+          // NOT silently true — they're errors. Default the stored value to
+          // the SAFE false so nothing downstream acts destructively even in
+          // the window before we report the error.
+          const parsed = parseBoolStrict(value);
+          if (parsed === undefined) {
+            flags[name] = false;
+            invalidBooleanFlags.push({ name, value });
+          } else {
+            flags[name] = parsed;
+          }
+        } else {
+          flags[name] = value;
+          // An explicit empty value ("--api=", "--idempotency-key=") is
+          // never a valid selector — treat it as missing, not "".
+          if (value === "") missingValueFlags.push(name);
+        }
       } else {
         const name = token.slice(2);
         const next = argv[i + 1];
-        if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) {
+        if (BOOLEAN_FLAGS.has(name)) {
+          // A boolean flag may be followed by an explicit true/false word.
+          // Consume it so `--allow-real false` and `--yes false` genuinely
+          // DISABLE the flag. Any OTHER following token is a positional (not
+          // this flag's value) — so `--yes maybe` is bare-true + "maybe"
+          // positional, and the command's positional-arity check catches it.
+          if (
+            next !== undefined &&
+            (next.toLowerCase() === "true" || next.toLowerCase() === "false")
+          ) {
+            flags[name] = next.toLowerCase() === "true";
+            i++;
+          } else {
+            flags[name] = true;
+          }
+        } else if (next === undefined || next.startsWith("--")) {
+          // A value-taking flag with no value is an error, not a silent
+          // `true` (which turned `--api --staging` into origin "https://true").
           flags[name] = true;
+          missingValueFlags.push(name);
+        } else if (next === "") {
+          // An explicit empty value ("--api ''") is not a valid selector.
+          flags[name] = "";
+          missingValueFlags.push(name);
+          i++;
         } else {
           flags[name] = next;
           i++;
@@ -62,7 +119,7 @@ export function parseArgv(argv) {
       args.push(token);
     }
   }
-  return { args, flags };
+  return { args, flags, missingValueFlags, invalidBooleanFlags };
 }
 
 /**
@@ -241,7 +298,7 @@ export const COMMANDS = {
     run: flows.remove,
     usage: "converly flows delete <flow_id> --yes",
     flags: ["yes"],
-    help: "Delete a flow permanently. Requires --yes. Unpublish first if it's published.",
+    help: "Delete a flow permanently. Requires --yes. If the flow is published, deleting also removes it from the live config, so it stops firing immediately.",
   },
   "flows validate": {
     run: flows.validate,
@@ -305,10 +362,38 @@ export const COMMANDS = {
   },
   "api": {
     run: misc.api,
-    usage: "converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1> [--json '<body>']",
-    flags: ["json"],
-    help: "Raw API request for anything not covered by a named command. Write /flows, not /v1/flows.",
+    usage: "converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1> [--json '<body>'] (DELETE requires --yes)",
+    flags: ["json", "yes"],
+    help: "Raw API request for anything not covered by a named command. Write /flows, not /v1/flows. A raw DELETE is destructive and requires --yes.",
   },
+};
+
+// How many positional arguments (beyond the command words) each command
+// accepts. Anything NOT listed takes zero — a stray positional there is a
+// mistake, most often a mistyped boolean (`flows create --custom no` leaves
+// "no" as a positional), so it's rejected before any request is sent.
+const COMMAND_MAX_ARGS = {
+  status: 1,
+  "sites get": 1,
+  "sites update": 1,
+  "install snippet": 1,
+  "install status": 1,
+  "destinations get": 1,
+  "destinations connect": 1,
+  "destinations conversions": 1,
+  "handoffs get": 1,
+  "handoffs wait": 1,
+  "triggers connect": 1,
+  "triggers options": 1,
+  actions: 1,
+  "flows get": 1,
+  "flows update": 1,
+  "flows delete": 1,
+  "flows validate": 1,
+  "flows publish": 1,
+  "flows unpublish": 1,
+  "events get": 1,
+  api: 2,
 };
 
 function overviewHelp() {
@@ -370,7 +455,7 @@ export function matchCommand(args) {
 }
 
 export async function main(argv) {
-  const { args, flags } = parseArgv(argv);
+  const { args, flags, missingValueFlags, invalidBooleanFlags } = parseArgv(argv);
 
   if (flags.version || args[0] === "version") {
     process.stdout.write(`${VERSION}\n`);
@@ -434,6 +519,81 @@ export async function main(argv) {
     return;
   }
 
+  // A KNOWN value-taking flag given no value (e.g. `--site` at the end,
+  // `--api --staging`) is an error — not a silent `true` that becomes a
+  // bogus target like origin "https://true". (Unknown flags were already
+  // rejected above; boolean flags never appear here.)
+  const realMissing = (missingValueFlags ?? []).filter((n) => allowed.has(n));
+  if (realMissing.length > 0) {
+    process.stderr.write(
+      JSON.stringify(
+        {
+          error: {
+            code: "missing_flag_value",
+            message: `Flag${realMissing.length > 1 ? "s" : ""} ${realMissing
+              .map((n) => `--${n}`)
+              .join(", ")} need${realMissing.length > 1 ? "" : "s"} a value, e.g. \`--${realMissing[0]} <value>\`.`,
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // A KNOWN boolean flag given a value that isn't exactly true/false is an
+  // error, never a silent coercion — this is the guard that stops
+  // `--yes=flase` or `--allow-real=0` from acting as a destructive `true`.
+  const realInvalidBool = (invalidBooleanFlags ?? []).filter((f) =>
+    allowed.has(f.name)
+  );
+  if (realInvalidBool.length > 0) {
+    process.stderr.write(
+      JSON.stringify(
+        {
+          error: {
+            code: "invalid_flag_value",
+            message: `Flag${realInvalidBool.length > 1 ? "s" : ""} ${realInvalidBool
+              .map((f) => `--${f.name}=${f.value}`)
+              .join(", ")} only accept${realInvalidBool.length > 1 ? "" : "s"} true or false.`,
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // Reject stray positional arguments centrally. Most commands take none;
+  // an unexpected one is usually a mistyped boolean (`--custom no` leaves
+  // "no" here) and must fail BEFORE any request — never be silently
+  // dropped by a handler that reads only args[0].
+  const maxArgs = COMMAND_MAX_ARGS[match.name] ?? 0;
+  if (match.rest.length > maxArgs) {
+    const extra = match.rest.slice(maxArgs);
+    process.stderr.write(
+      JSON.stringify(
+        {
+          error: {
+            code: "unexpected_argument",
+            message:
+              `Unexpected argument${extra.length > 1 ? "s" : ""}: ` +
+              `${extra.map((a) => JSON.stringify(a)).join(", ")}. ` +
+              `Usage: ${match.def.usage}`,
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   try {
     // Inside the error boundary: a malformed --api value must produce a
     // JSON error, not a raw stack trace.
@@ -455,7 +615,9 @@ export async function main(argv) {
       const body = err.body ?? {};
       const apiErr = body.error;
       if (apiErr && typeof apiErr === "object") {
-        error = { status: err.status, ...apiErr };
+        // Spread the server fields FIRST, then set status — so a stray
+        // `status` in the server body can't override the real HTTP status.
+        error = { ...apiErr, status: err.status };
       } else {
         error = {
           status: err.status,
@@ -467,11 +629,41 @@ export async function main(argv) {
         error.user_message = body.user_message;
       }
       if (body.hint && !error.hint) error.hint = body.hint;
+      // A CLIENT-classified failure (reauth_required, credentials_changed)
+      // is authoritative over the server body the ApiError was built from —
+      // its code/message must not be masked by the server's 401 payload.
+      if (err.code) {
+        error.code = err.code;
+        if (err.message) error.message = err.message;
+      }
     } else {
       error = {
-        code: err instanceof AuthMissingError ? "not_logged_in" : "cli_error",
+        code:
+          err.code ??
+          (err instanceof AuthMissingError ? "not_logged_in" : "cli_error"),
         message: err.message,
       };
+    }
+    // The CLIENT's transport-level classification is AUTHORITATIVE for these
+    // control fields — never inherit them from the server's error body,
+    // which could contradict (e.g. a PATCH 5xx whose body says
+    // `retryable:true`). Strip any the server echoed via the `...apiErr`
+    // spread, then set purely from the thrown error, so a non-idempotent
+    // PATCH can never surface as retryable and a POST's recovery key is
+    // never dropped.
+    delete error.retryable;
+    delete error.idempotency_key;
+    delete error.outcome_uncertain;
+    delete error.retry_after;
+    if (err.idempotencyKey) error.idempotency_key = err.idempotencyKey;
+    if (err.retryable) error.retryable = true;
+    if (err.retryAfter !== undefined && err.retryAfter !== null) {
+      error.retry_after = err.retryAfter;
+    }
+    if (err.outcomeUncertain) {
+      error.outcome_uncertain = true;
+      // Force our check-state hint over any server-supplied one.
+      if (err.retryHint) error.hint = err.retryHint;
     }
     const payload = { error };
     if (err.handoff) payload.handoff = err.handoff;

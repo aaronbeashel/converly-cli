@@ -4,6 +4,7 @@
  */
 
 import { apiRequest } from "../http.js";
+import { assertIdSegment } from "./ids.js";
 
 export async function list({ flags, origin }) {
   return apiRequest(origin, "GET", "/events", {
@@ -20,5 +21,5 @@ export async function list({ flags, origin }) {
 }
 
 export async function get({ args, origin }) {
-  return apiRequest(origin, "GET", `/events/${args[0]}`);
+  return apiRequest(origin, "GET", `/events/${assertIdSegment(args[0], "event id")}`);
 }

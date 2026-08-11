@@ -9,6 +9,7 @@
  */
 
 import { apiRequest } from "../http.js";
+import { assertIdSegment } from "./ids.js";
 
 export async function connect({ args, flags, origin }) {
   if (!args[0]) {
@@ -84,6 +85,7 @@ export async function options({ args, flags, origin }) {
       "Missing --site. Pass the site id (from `converly sites list`) the connection belongs to."
     );
   }
+  assertIdSegment(flags.site, "site id");
 
   const result = await apiRequest(
     origin,
