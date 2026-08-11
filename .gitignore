@@ -1,2 +1,9 @@
 node_modules/
 *.tgz
+
+# Never commit credentials or local env to a public repo
+.npmrc
+.env
+.env.*
+.converly/
+.DS_Store
