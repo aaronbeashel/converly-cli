@@ -64,6 +64,11 @@ export async function snippet({ args, origin }) {
 }
 
 export async function installStatus({ args, origin }) {
+  if (!args[0]) {
+    throw new Error(
+      "Usage: converly install status <site_id>   (get the id from `converly sites list`)"
+    );
+  }
   return apiRequest(origin, "GET", `/sites/${args[0]}/install-status`);
 }
 

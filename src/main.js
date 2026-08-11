@@ -201,6 +201,12 @@ export const COMMANDS = {
     flags: ["site"],
     help: "Create a connect link for a trigger source that needs setup outside the CLI. For most sources a HUMAN opens the returned url and signs in to the platform there. For the api source the page shows the site's webhook URL + secret, which the human hands to whoever maintains the backend. Then `converly handoffs wait <id>`.",
   },
+  "triggers options": {
+    run: triggers.options,
+    usage: "converly triggers options <source> --site <site_id> [--query <text>] [--limit N]   (e.g. typeform)",
+    flags: ["site", "query", "limit"],
+    help: "List a CONNECTED platform's filter options — the account's REAL forms / event types (with ids + names) — so you can offer the user a specific one instead of inventing values. Only requires_connection providers (Typeform, Calendly, Acuity, Jotform); connect first with `triggers connect`. Then narrow the flow by writing trigger_config.conditions, e.g. `converly flows update <flow_id> --json '{\"trigger_config\":{\"conditions\":{\"form\":{\"ids\":[\"...\"],\"names\":[\"...\"]}}}}'`. --query filters value names (case-insensitive); --limit caps values per field (default 50). Browser-detected form tools narrow by page instead (`flows create --pages`).",
+  },
   "actions": {
     run: flows.actionTypes,
     usage: "converly actions <destination_type>   (e.g. google-ads)",

@@ -78,13 +78,33 @@ export async function connect({ args, flags, origin }) {
   };
 }
 
+/**
+ * Catch the classic id mix-up BEFORE the request: the handoff's browser
+ * URL ends in a raw UUID, but the API's id is the prefixed hdf_… form
+ * returned at creation. An agent that lost the create output and lifted
+ * the id from the URL gets told exactly what went wrong (round-2
+ * role-play finding) instead of a bare not-found.
+ */
+function guardHandoffId(id, usage) {
+  if (!id) throw new Error(`Usage: ${usage}`);
+  if (/^https?:\/\//i.test(id) || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) {
+    throw new Error(
+      "That looks like the handoff's browser URL (or the UUID from it). " +
+        "The API needs the prefixed id (hdf_…) returned when the handoff was " +
+        "created. If you no longer have it, create a new handoff — links can't " +
+        "be revived from their URL."
+    );
+  }
+  return id;
+}
+
 export async function handoffGet({ args, origin }) {
-  if (!args[0]) throw new Error("Usage: converly handoffs get <handoff_id>");
+  guardHandoffId(args[0], "converly handoffs get <handoff_id>");
   return apiRequest(origin, "GET", `/handoffs/${args[0]}`);
 }
 
 export async function handoffWait({ args, flags, origin }) {
-  if (!args[0]) throw new Error("Usage: converly handoffs wait <handoff_id>");
+  guardHandoffId(args[0], "converly handoffs wait <handoff_id>");
   const timeoutSeconds = Number(flags.timeout ?? 600);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
     throw new Error("--timeout must be a positive number of seconds.");

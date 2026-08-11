@@ -10,7 +10,10 @@ import {
   buildTriggerConfig,
   toAgentTriggerCatalogue,
 } from "../src/commands/flows.js";
-import { connect as triggersConnect } from "../src/commands/triggers.js";
+import {
+  connect as triggersConnect,
+  options as triggersOptions,
+} from "../src/commands/triggers.js";
 
 test("parseArgv separates args and flags", () => {
   const { args, flags } = parseArgv([
@@ -172,6 +175,26 @@ test("triggers connect validates source and --site before any request", async ()
     triggersConnect({ args: ["api"], flags: {}, origin }),
     /Missing --site/
   );
+});
+
+test("triggers options validates source and --site before any request", async () => {
+  const origin = "https://app.converly.io";
+  await assert.rejects(
+    triggersOptions({ args: [], flags: {}, origin }),
+    /Missing trigger source/
+  );
+  await assert.rejects(
+    triggersOptions({ args: ["typeform"], flags: {}, origin }),
+    /Missing --site/
+  );
+});
+
+test("`triggers options` is a distinct two-word command over `triggers`", () => {
+  const two = matchCommand(["triggers", "options", "typeform"]);
+  assert.equal(two.name, "triggers options");
+  assert.deepEqual(two.rest, ["typeform"]);
+  // Its declared flags cover what the handler reads (strict parser).
+  assert.deepEqual(COMMANDS["triggers options"].flags, ["site", "query", "limit"]);
 });
 
 test("flows create: --trigger api without --key rejects with the fix", async () => {
