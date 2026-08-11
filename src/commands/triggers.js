@@ -30,6 +30,20 @@ export async function connect({ args, flags, origin }) {
     },
   });
 
+  // A healthy existing connection short-circuits with already_connected
+  // instead of a link — no waiting, nothing for a human to open.
+  if (handoff.already_connected) {
+    const steps = handoff.user_steps_remaining ?? [];
+    return {
+      ...handoff,
+      next_step: steps.length
+        ? "Already connected — no link needed. BUT these steps are still outstanding and Converly can't verify them: " +
+          steps.join(" ") +
+          " Confirm with the user before treating setup as done."
+        : "Already connected — no link needed. Build flows with this source now.",
+    };
+  }
+
   // The api source shows credentials instead of running an OAuth
   // sign-in, so the follow-up instructions differ.
   const nextStep =
