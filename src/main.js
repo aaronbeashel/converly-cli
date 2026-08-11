@@ -283,13 +283,13 @@ export const COMMANDS = {
     run: misc.rulesList,
     usage: "converly rules list",
     flags: [],
-    help: "List internal-traffic rules (submissions matching them are ignored).",
+    help: "List recorded internal-traffic rules. NOTE: rules are recorded but NOT enforced yet — matching submissions still fire to every destination. Planned feature; do not describe it as active.",
   },
   "rules create": {
     run: misc.rulesCreate,
     usage: "converly rules create --ip 1.2.3.4 | --cidr 10.0.0.0/24 | --email-pattern '*@yourcompany.com' [--description X]",
     flags: ["ip", "cidr", "email-pattern", "description"],
-    help: "Exclude the team's own traffic so testing doesn't pollute conversions.",
+    help: "Record an internal-traffic exclusion rule. NOT enforced yet — a matching submission still fires to every destination. Planned feature; never tell the user their traffic is being excluded.",
   },
   "subscription": {
     run: misc.subscription,

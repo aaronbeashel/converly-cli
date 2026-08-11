@@ -255,7 +255,7 @@ export async function testEvent({ flags, origin }) {
     }
   }
 
-  return apiRequest(origin, "POST", "/test-event", {
+  const result = await apiRequest(origin, "POST", "/test-event", {
     body: {
       flow_id: flags.flow,
       action: {
@@ -269,4 +269,38 @@ export async function testEvent({ flags, origin }) {
       ...(flags["allow-real"] && { allow_real_conversion: true }),
     },
   });
+
+  // Browser-only destinations have NO server leg to test — the raw "no
+  // server-side forwarder" answer is true but unhelpful (test-campaign
+  // finding). Derive the explanation from catalogue DATA, never a
+  // hardcoded platform list, and tell the agent what the real test is.
+  if (
+    result &&
+    result.server_status === "not_attempted" &&
+    /no server-side forwarder/i.test(result.error_message ?? "")
+  ) {
+    try {
+      const types = await apiRequest(origin, "GET", "/destination-types", {
+        public: true,
+      });
+      const entry = (types?.data ?? []).find(
+        (t) => t.type === result.integration_id
+      );
+      if (entry?.setup?.delivery === "browser") {
+        return {
+          ...result,
+          next_step:
+            `${entry.name ?? result.integration_id} fires from the visitor's ` +
+            "browser into the platform's own tag, so there is no server call " +
+            "to test. Prove it with a real submission on the page and check " +
+            "`converly events list` — client_status \"fired\" is the success " +
+            "signal. The platform's own tag must be on the page (see the " +
+            "destination's setup.page_prerequisite).",
+        };
+      }
+    } catch {
+      /* annotation is best-effort — return the raw result */
+    }
+  }
+  return result;
 }
