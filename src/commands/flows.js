@@ -204,7 +204,7 @@ export async function remove({ args, flags, origin }) {
   // can't delete on a whim mid-plan.
   if (!flags.yes) {
     throw new Error(
-      `Deleting ${flowId} is permanent. Re-run with --yes to confirm (unpublish first if it's published).`
+      `Deleting ${flowId} is permanent, and a published flow stops firing immediately (the delete also removes it from the live config). Re-run with --yes to confirm.`
     );
   }
   return apiRequest(origin, "DELETE", `/flows/${flowId}`);
