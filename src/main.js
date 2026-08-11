@@ -444,14 +444,35 @@ export async function main(argv) {
     const result = await match.def.run({ args: match.rest, flags, origin });
     process.stdout.write(JSON.stringify(result ?? { ok: true }, null, 2) + "\n");
   } catch (err) {
-    const error =
-      err instanceof ApiError
-        ? { status: err.status, ...(err.body?.error ?? { message: err.message }) }
-        : {
-            code:
-              err instanceof AuthMissingError ? "not_logged_in" : "cli_error",
-            message: err.message,
-          };
+    // Two upstream error shapes exist: the /v1 envelope ({error: {code,
+    // message, …}}) and delivery pass-throughs where `error` is a bare
+    // STRING code with user_message/hint as siblings (e.g. the Google Ads
+    // conversions proxy). Spreading a string produces {"0":"g","1":"o"…}
+    // and silently DROPS the helpful copy — found live in the Google Ads
+    // cosplay round.
+    let error;
+    if (err instanceof ApiError) {
+      const body = err.body ?? {};
+      const apiErr = body.error;
+      if (apiErr && typeof apiErr === "object") {
+        error = { status: err.status, ...apiErr };
+      } else {
+        error = {
+          status: err.status,
+          code: typeof apiErr === "string" ? apiErr : "api_error",
+          message: body.user_message ?? body.message ?? err.message,
+        };
+      }
+      if (body.user_message && !error.user_message && error.message !== body.user_message) {
+        error.user_message = body.user_message;
+      }
+      if (body.hint && !error.hint) error.hint = body.hint;
+    } else {
+      error = {
+        code: err instanceof AuthMissingError ? "not_logged_in" : "cli_error",
+        message: err.message,
+      };
+    }
     const payload = { error };
     if (err.handoff) payload.handoff = err.handoff;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
