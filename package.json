@@ -1,8 +1,11 @@
 {
-  "name": "converly",
+  "name": "@converly/cli",
   "version": "1.0.0",
   "description": "Command line tool for Converly conversion tracking. Set up server-side conversion tracking for Google Ads, Meta, GA4 and more from a terminal or an AI agent.",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "converly": "bin/converly.js"
   },

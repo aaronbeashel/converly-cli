@@ -7,10 +7,10 @@ Converly tracks form submissions on your website and fires conversion events to 
 ## Install
 
 ```bash
-npm install -g converly
+npm install -g @converly/cli
 ```
 
-Requires Node 20 or newer.
+This installs the `converly` command. Requires Node 20 or newer.
 
 ## Log in
 
