@@ -336,18 +336,12 @@ export const COMMANDS = {
     flags: [],
     help: "One event with per-destination delivery status and any pipeline notices.",
   },
-  "rules list": {
-    run: misc.rulesList,
-    usage: "converly rules list",
-    flags: [],
-    help: "List recorded internal-traffic rules. NOTE: rules are recorded but NOT enforced yet — matching submissions still fire to every destination. Planned feature; do not describe it as active.",
-  },
-  "rules create": {
-    run: misc.rulesCreate,
-    usage: "converly rules create --ip 1.2.3.4 | --cidr 10.0.0.0/24 | --email-pattern '*@yourcompany.com' [--description X]",
-    flags: ["ip", "cidr", "email-pattern", "description"],
-    help: "Record an internal-traffic exclusion rule. NOT enforced yet — a matching submission still fires to every destination. Planned feature; never tell the user their traffic is being excluded.",
-  },
+  // NOTE: `rules list` / `rules create` were removed deliberately. They
+  // recorded internal-traffic exclusion rules that nothing enforces, so
+  // the only thing they could actually do was tempt an agent into telling
+  // a customer their traffic was being excluded when it wasn't. The /v1
+  // endpoints still exist for when enforcement ships; until then the CLI
+  // does not advertise the feature. Reinstate both when it is real.
   "subscription": {
     run: misc.subscription,
     usage: "converly subscription",

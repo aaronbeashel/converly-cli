@@ -1,6 +1,5 @@
 /**
- * Everything else: subscription, usage, internal-traffic rules, and the
- * raw API escape hatch.
+ * Everything else: subscription, usage, and the raw API escape hatch.
  */
 
 import { apiRequest } from "../http.js";
@@ -12,50 +11,6 @@ export async function subscription({ origin }) {
 
 export async function usage({ origin }) {
   return apiRequest(origin, "GET", "/usage");
-}
-
-export async function rulesList({ origin }) {
-  return apiRequest(origin, "GET", "/internal-traffic-rules");
-}
-
-export async function rulesCreate({ flags, origin }) {
-  // Exactly one selector — passing several is contradictory input, not a
-  // "first one wins" situation.
-  const selectors = ["ip", "cidr", "email-pattern"].filter(
-    (k) => flags[k] !== undefined
-  );
-  if (selectors.length > 1) {
-    throw new Error(
-      `Pass only one of --ip, --cidr, --email-pattern (got ${selectors
-        .map((k) => `--${k}`)
-        .join(", ")}).`
-    );
-  }
-  let ruleType;
-  let ruleValue;
-  if (flags.ip !== undefined) {
-    ruleType = "ip";
-    ruleValue = flags.ip;
-  } else if (flags.cidr !== undefined) {
-    ruleType = "ip_cidr";
-    ruleValue = flags.cidr;
-  } else if (flags["email-pattern"] !== undefined) {
-    ruleType = "email_pattern";
-    ruleValue = flags["email-pattern"];
-  } else {
-    throw new Error(
-      "Pass one of --ip <address>, --cidr <range>, --email-pattern <pattern like *@yourcompany.com>."
-    );
-  }
-  return apiRequest(origin, "POST", "/internal-traffic-rules", {
-    body: {
-      rule_type: ruleType,
-      rule_value: ruleValue,
-      ...(flags.description !== undefined && {
-        description: flags.description,
-      }),
-    },
-  });
 }
 
 /**
