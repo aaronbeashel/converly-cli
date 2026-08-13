@@ -45,7 +45,7 @@ converly events list --limit 10
 
 ## For AI agents
 
-The agent runbook lives at [github.com/aaronbeashel/converly-agent](https://github.com/aaronbeashel/converly-agent) — install it with `npx skills add aaronbeashel/converly-agent` or `clawhub install converly`. It teaches the full workflow, including the parts that need a human (authorizing the ad platform).
+The agent runbook lives at [github.com/converlyio/converly-agent](https://github.com/converlyio/converly-agent). Install it with `npx skills add converlyio/converly-agent` or `clawhub install converly`. It teaches the full workflow, including the parts that need a human (authorizing the ad platform).
 
 Design notes for agent use:
 
