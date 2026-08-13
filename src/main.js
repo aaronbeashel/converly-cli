@@ -230,9 +230,16 @@ export const COMMANDS = {
   },
   "destinations conversions": {
     run: destinations.conversions,
-    usage: "converly destinations conversions <type> [--refresh]",
-    flags: ["refresh"],
-    help: "List the conversion actions / pixel events available in a connected destination (the picker for flow configs).",
+    usage: "converly destinations conversions <type> [--refresh] [--site <site_id>]",
+    flags: ["refresh", "site"],
+    help: "List the conversion actions / pixel events available in a connected destination (the picker for flow configs). Pass --site on multi-site accounts; omitting it there is refused (site_id_required) so the wrong site's ad account can never be read by accident.",
+  },
+  "destinations create-conversion": {
+    run: destinations.createConversion,
+    usage:
+      "converly destinations create-conversion <type> --name <name> [--site <site_id>] [--category <cat>] [--event-type <t>] [--conversion-method <m>] [--idempotency-key <k>]",
+    flags: ["name", "site", "category", "event-type", "conversion-method", "idempotency-key"],
+    help: "Create a NEW conversion in a connected ad platform, for when the account has none to pick. ASK THE CUSTOMER FIRST — this writes a permanent object into their real ad account (a ChatGPT Ads event can never be deleted; a LinkedIn rule applies to all live campaigns). Google Ads/LinkedIn need --category, LinkedIn also --conversion-method (from the conversions list's creatable_methods), ChatGPT Ads needs --event-type. Only some connections support create — check supports_create on `converly destinations conversions <type>` first. Needs the destination_conversions:write (or destinations:write) scope.",
   },
   "handoffs get": {
     run: destinations.handoffGet,
@@ -375,6 +382,7 @@ const COMMAND_MAX_ARGS = {
   "destinations get": 1,
   "destinations connect": 1,
   "destinations conversions": 1,
+  "destinations create-conversion": 1,
   "handoffs get": 1,
   "handoffs wait": 1,
   "triggers connect": 1,

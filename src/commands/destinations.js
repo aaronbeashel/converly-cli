@@ -177,6 +177,43 @@ export async function conversions({ args, flags, origin }) {
     origin,
     "GET",
     `/destinations/${destId(args[0], "Usage: converly destinations conversions <type>")}/conversions`,
-    { query: { refresh: flags.refresh ? "true" : undefined } }
+    {
+      query: {
+        refresh: flags.refresh ? "true" : undefined,
+        // Which site's connected ad account to read. Optional on a
+        // single-site account; on a multi-site one, omitting it falls back
+        // to the account's first site — pass it to be sure.
+        site_id: flags.site || undefined,
+      },
+    }
   );
+}
+
+export async function createConversion({ args, flags, origin }) {
+  const type = destId(
+    args[0],
+    "Usage: converly destinations create-conversion <type> --name <name> [--site <site_id>] [--category <cat>] [--event-type <t>] [--conversion-method <m>]"
+  );
+  if (!flags.name) {
+    throw new Error(
+      "Missing --name. The conversion name the customer will see in the ad platform."
+    );
+  }
+  // This writes a PERMANENT object into the customer's real ad account —
+  // a ChatGPT Ads conversion event can never be deleted, a LinkedIn rule
+  // applies to all live campaigns. An agent driving this CLI must confirm
+  // with the customer first; the help text says so too.
+  //
+  // Idempotency: apiRequest auto-mints an Idempotency-Key on every POST and
+  // prints it on ambiguous failures, so a retry with --idempotency-key
+  // cannot double-create. The delivery-side ledger enforces it end to end.
+  const body = { name: flags.name };
+  if (flags.category) body.category = flags.category;
+  if (flags["event-type"]) body.event_type = flags["event-type"];
+  if (flags["conversion-method"]) body.conversion_method = flags["conversion-method"];
+  return apiRequest(origin, "POST", `/destinations/${type}/conversions`, {
+    query: { site_id: flags.site || undefined },
+    body,
+    idempotencyKey: flags["idempotency-key"] || undefined,
+  });
 }

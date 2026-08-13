@@ -92,6 +92,10 @@ test("login scopes stay inside the server's registration ceiling", () => {
     "sites:read",
     "flows:read",
     "destinations:read",
+    // Added with the conversion-list consolidation: the narrow create scope
+    // is in the server's MCP_PERMISSIONS-derived ceiling, so login may
+    // request it. Without it create-conversion 403s on every credential.
+    "destination_conversions:write",
     "events:read",
     "sites:write",
     "flows:write",
@@ -728,4 +732,39 @@ test("toAgentTriggerCatalogue: strips designed filter schemas and custom_event",
   // Everything an agent legitimately needs survives.
   assert.equal(form.when_to_use, "…");
   assert.deepEqual(form.providers, ["generic-form"]);
+});
+
+
+test("create-conversion is registered with the safety-critical flags", async () => {
+  // The command writes a permanent object into a customer's ad account, so
+  // its registration must carry the site + idempotency affordances and the
+  // help text must tell an agent to ask the customer first.
+  const { COMMANDS } = await import("../src/main.js");
+  const cmd = COMMANDS["destinations create-conversion"];
+  assert.ok(cmd, "command registered");
+  for (const flag of ["name", "site", "category", "event-type", "conversion-method", "idempotency-key"]) {
+    assert.ok(cmd.flags.includes(flag), `flag --${flag}`);
+  }
+  assert.match(cmd.help, /ASK THE CUSTOMER FIRST/);
+  assert.match(cmd.help, /can never be deleted/);
+  assert.match(cmd.help, /supports_create/);
+});
+
+test("create-conversion refuses without --name before any network call", async () => {
+  const destinations = await import("../src/commands/destinations.js");
+  await assert.rejects(
+    () => destinations.createConversion({ args: ["google-ads"], flags: {}, origin: "prod" }),
+    /Missing --name/
+  );
+});
+
+
+test("login requests the create scope (or create-conversion is dead on arrival)", async () => {
+  const { LOGIN_SCOPES } = await import("../src/oauth.js");
+  assert.ok(
+    LOGIN_SCOPES.includes("destination_conversions:write"),
+    "create-conversion needs destination_conversions:write at login"
+  );
+  // …and never the broad scope, which also authorizes credential ingestion.
+  assert.ok(!LOGIN_SCOPES.includes("destinations:write"));
 });

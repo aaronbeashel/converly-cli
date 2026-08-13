@@ -50,6 +50,12 @@ export const LOGIN_SCOPES = [
   "flows:read",
   "flows:write",
   "destinations:read",
+  // Create a conversion in a connected ad account (Google Ads / LinkedIn
+  // OAuth / provisioned ChatGPT). The NARROW scope — deliberately not
+  // destinations:write, which also authorizes credential ingestion. Without
+  // this the create-conversion command 403s on every normally-logged-in
+  // credential. Tokens minted before this line existed need one re-login.
+  "destination_conversions:write",
   "destinations:disconnect",
   "events:read",
   "handoffs:create",
