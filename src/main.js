@@ -5,6 +5,10 @@
  * - stdout is ALWAYS a single JSON document (the result).
  * - Human-facing progress goes to stderr.
  * - Exit 0 on success, 1 on any failure, with a JSON error on stderr.
+ * - A handler may request a MORE SPECIFIC exit code by setting `exitCode`
+ *   on the error it throws. Anything that doesn't still exits 1, so this is
+ *   purely additive. The `gtm` group uses 2-5 (see src/gtm-errors.js) so an
+ *   agent can branch on the KIND of failure without parsing the message.
  */
 
 import { createRequire } from "node:module";
@@ -17,6 +21,7 @@ import * as flows from "./commands/flows.js";
 import * as triggers from "./commands/triggers.js";
 import * as events from "./commands/events.js";
 import * as misc from "./commands/misc.js";
+import * as gtm from "./commands/gtm.js";
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require("../package.json");
@@ -35,6 +40,7 @@ const BOOLEAN_FLAGS = new Set([
   "allow-real",
   "device",
   "browser",
+  "confirm",
 ]);
 
 // Explicit boolean values are accepted ONLY as the exact words true/false
@@ -354,6 +360,110 @@ export const COMMANDS = {
     flags: [],
     help: "Current usage against plan limits.",
   },
+  // --- Google Tag Manager ---
+  //
+  // A separate Google login from `converly login` (different provider,
+  // different credential), stored in the same ~/.converly/config.json.
+  // Read commands answer the questions you cannot answer by looking at a
+  // live page; `gtm changes` is the one that most often explains a
+  // "missing" tag. Only `gtm publish` touches the live site, and it is
+  // gated — see its help.
+  "gtm login": {
+    run: gtm.login,
+    usage: "converly gtm login [--no-open] [--browser]",
+    flags: ["browser"],
+    help: "Connect a Google account so the gtm commands can read and write Tag Manager. Opens a browser ON THIS MACHINE (the redirect hands the credential back here). --no-open prints the URL instead of launching it. The credential is stored in ~/.converly/config.json (0600) alongside the Converly one. Requires a Desktop app OAuth client, so set CONVERLY_GTM_CLIENT_ID if this build has no default. Requests exactly four Tag Manager scopes and no delete scope.",
+  },
+  "gtm logout": {
+    run: gtm.logout,
+    usage: "converly gtm logout",
+    flags: [],
+    help: "Revoke the Google token at Google and remove the stored credential.",
+  },
+  "gtm status": {
+    run: gtm.status,
+    usage: "converly gtm status",
+    flags: [],
+    help: "Which Google account is connected and whether the token still works. Proves the token by calling the API rather than just reporting that a file exists. Also reports the scopes Google actually GRANTED. A scope the user unticked at consent shows up here instead of as a baffling permission_denied later. No email is shown because no email scope is requested.",
+  },
+  "gtm accounts": {
+    run: gtm.accounts,
+    usage: "converly gtm accounts",
+    flags: [],
+    help: "List the Tag Manager accounts this Google login can see. Start here, because every other command needs an account id.",
+  },
+  "gtm containers": {
+    run: gtm.containers,
+    usage: "converly gtm containers --account <id>",
+    flags: ["account"],
+    help: "List an account's containers. publicId is the GTM-XXXXXX in the snippet on the page, so it is the field to match against a live site.",
+  },
+  "gtm workspaces": {
+    run: gtm.workspaces,
+    usage: "converly gtm workspaces --account <id> --container <id>",
+    flags: ["account", "container"],
+    help: "List a container's workspaces. Workspace IDs are assigned by GTM, are NOT predictable, and are rarely 1, so always list before using one. Unpublished work can sit in any workspace.",
+  },
+  "gtm tags": {
+    run: gtm.tags,
+    usage: "converly gtm tags --account <id> --container <id> --workspace <id>",
+    flags: ["account", "container", "workspace"],
+    help: "List a workspace's tags with the fields that explain silent failures: paused, blockingTriggerId, tagFiringOption, consentSettings, and the destination IDs pulled out of parameter. A tag can be perfectly configured and still never fire because it is paused or blocked, or fire into the wrong property because a measurement ID points elsewhere.",
+  },
+  "gtm triggers": {
+    run: gtm.triggers,
+    usage: "converly gtm triggers --account <id> --container <id> --workspace <id>",
+    flags: ["account", "container", "workspace"],
+    help: "List a workspace's triggers with their conditions returned LITERALLY, e.g. equals {arg0: \"{{_event}}\", arg1: \"purchase\"}. Whether that condition is ever true on the live site is exactly what static analysis cannot tell you, so it is not guessed at here.",
+  },
+  "gtm variables": {
+    run: gtm.variables,
+    usage: "converly gtm variables --account <id> --container <id> --workspace <id>",
+    flags: ["account", "container", "workspace"],
+    help: "List a workspace's user-defined variables. Built-in variables are separate, so use `converly gtm builtins`.",
+  },
+  "gtm builtins": {
+    run: gtm.builtins,
+    usage: "converly gtm builtins --account <id> --container <id> --workspace <id>",
+    flags: ["account", "container", "workspace"],
+    help: "Which built-in variables are enabled in a workspace, plus the trigger-critical ones that are NOT. A trigger keyed on a built-in that was never switched on is permanently dead, and nothing on the live page reveals it.",
+  },
+  "gtm changes": {
+    run: gtm.changes,
+    usage: "converly gtm changes --account <id> --container <id> [--workspace <id>]",
+    flags: ["account", "container", "workspace"],
+    help: "Unpublished changes, checked across EVERY workspace unless you name one. This is the highest-value command in the group: it distinguishes \"there is no tag\" from \"the tag is built and just needs publishing\", which look identical from outside the container and lead to opposite advice. Work routinely sits in a workspace nobody thought to check.",
+  },
+  "gtm versions": {
+    run: gtm.versions,
+    usage: "converly gtm versions --account <id> --container <id>",
+    flags: ["account", "container"],
+    help: "Container version history plus which version is live, to date a breakage against container changes. Note the API exposes no publish timestamp; the date shown is derived from the version fingerprint (its storage time), so treat it as approximate.",
+  },
+  "gtm create-tag": {
+    run: gtm.createTag,
+    usage: "converly gtm create-tag --account <id> --container <id> --workspace <id> --name <name> --type <type> [--trigger <triggerId,...>] [--json '<tag body>']",
+    flags: ["account", "container", "workspace", "name", "type", "trigger", "notes", "json"],
+    help: "Create a tag in a workspace. Safe: nothing reaches the live site until a version is published. --json takes a full GTM Tag resource and wins over the convenience flags, which is how you set parameter, consentSettings or tagFiringOption. Copy --type from an existing tag rather than guessing it. tagFiringOption values are lowercase-initial: unlimited, oncePerEvent, oncePerLoad.",
+  },
+  "gtm create-trigger": {
+    run: gtm.createTrigger,
+    usage: "converly gtm create-trigger --account <id> --container <id> --workspace <id> --name <name> --type <type> [--json '<trigger body>']",
+    flags: ["account", "container", "workspace", "name", "type", "notes", "json"],
+    help: "Create a trigger in a workspace. Safe until published. Use --json for filter / customEventFilter / autoEventFilter conditions.",
+  },
+  "gtm create-variable": {
+    run: gtm.createVariable,
+    usage: "converly gtm create-variable --account <id> --container <id> --workspace <id> --name <name> --type <type> [--json '<variable body>']",
+    flags: ["account", "container", "workspace", "name", "type", "notes", "json"],
+    help: "Create a user-defined variable in a workspace. Safe until published. Use --json for the parameter block.",
+  },
+  "gtm publish": {
+    run: gtm.publish,
+    usage: "converly gtm publish --account <id> --container <id> (--workspace <id> | --version-id <id>) --confirm   [requires CONVERLY_GTM_ALLOW_PUBLISH=true]",
+    flags: ["account", "container", "workspace", "version-id", "name", "notes", "confirm"],
+    help: "Publish a container version to the LIVE site. GATED: needs BOTH the environment variable CONVERLY_GTM_ALLOW_PUBLISH=true AND --confirm, and refuses with exit code 5 otherwise. The environment variable is the operator's gate, because an agent can pass any flag it likes but cannot set the environment of a session a human already started. Do not ask the user to set it just to get past this. --workspace creates a version from that workspace and publishes it; --version-id publishes an existing one (it is spelled --version-id, not --version, because --version is the global flag that prints the CLI version). Run `converly gtm changes` first to see exactly what would go live. Creating tags inside a workspace needs no gate.",
+  },
   "api": {
     run: misc.api,
     usage: "converly api <GET|POST|PATCH|DELETE> <path relative to /api/v1> [--json '<body>'] (DELETE requires --yes)",
@@ -661,7 +771,15 @@ export async function main(argv) {
     }
     const payload = { error };
     if (err.handoff) payload.handoff = err.handoff;
+    // The gtm commands attach their gate details so a caller can see WHICH
+    // condition failed without parsing the message.
+    if (err.gate) payload.gate = err.gate;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
-    process.exitCode = 1;
+    // Additive exit codes: an error that doesn't ask for a specific one
+    // still exits 1, so every pre-existing command keeps its 0/1 contract.
+    // The gtm group uses 2-5 (see src/gtm-errors.js) so an agent can branch
+    // on the failure kind without reading prose.
+    process.exitCode =
+      Number.isInteger(err.exitCode) && err.exitCode > 0 ? err.exitCode : 1;
   }
 }

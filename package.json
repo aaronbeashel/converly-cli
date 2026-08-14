@@ -1,6 +1,6 @@
 {
   "name": "@converly/cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Command line tool for Converly conversion tracking. Set up server-side conversion tracking for Google Ads, Meta, GA4 and more from a terminal or an AI agent.",
   "type": "module",
   "publishConfig": {
@@ -34,7 +34,9 @@
     "openclaw",
     "claude-code",
     "mcp",
-    "cli"
+    "cli",
+    "google-tag-manager",
+    "gtm"
   ],
   "homepage": "https://converly.io/agent",
   "repository": {

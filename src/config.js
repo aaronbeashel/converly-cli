@@ -93,6 +93,14 @@ export function loadConfig() {
       `Config at ${CONFIG_PATH} has an invalid "default_origin". ${CORRUPT_HINT}`
     );
   }
+  // Same reasoning as `credentials`: a malformed google block would silently
+  // drop assigned properties on save, so `gtm login` would report success
+  // and store nothing.
+  if (parsed.google !== undefined && !isPlainObject(parsed.google)) {
+    throw new Error(
+      `Config at ${CONFIG_PATH} has an invalid "google" section. ${CORRUPT_HINT}`
+    );
+  }
   return parsed;
 }
 
@@ -442,6 +450,76 @@ export function commitRefreshedCredentials(origin, creds, expected) {
     cfg.credentials = cfg.credentials ?? {};
     cfg.credentials[origin] = creds;
     // A refresh must never retarget the default deployment.
+    saveConfig(cfg);
+    return { ok: true };
+  });
+}
+
+// --- Google (Tag Manager) credentials ---
+//
+// Stored in the SAME ~/.converly/config.json (0600, dir 0700) under a
+// separate top-level `google` key, using the same lock + atomic-rename
+// write path as the Converly credential. Deliberately NOT a second
+// credential store: one file, one set of permissions, one lock.
+//
+// It is NOT keyed by Converly origin — a Google login is independent of
+// which Converly deployment you happen to be talking to.
+//
+// {
+//   "google": {
+//     "access_token": "ya29....",
+//     "refresh_token": "1//...",
+//     "expires_at": 1760000000000,
+//     "scope": "https://www.googleapis.com/auth/tagmanager.manage.accounts ...",
+//     "client_id": "....apps.googleusercontent.com",
+//     "obtained_at": "2026-01-01T00:00:00.000Z"
+//   }
+// }
+
+export function getGoogleCredentials() {
+  const cfg = loadConfig();
+  const google = cfg.google;
+  // Presence of the key is not proof of a usable credential — a truncated
+  // or hand-edited block must read as "logged out", not crash later.
+  if (!isPlainObject(google) || typeof google.access_token !== "string") {
+    return null;
+  }
+  return google;
+}
+
+export function setGoogleCredentials(creds) {
+  withConfigLock(() => {
+    const cfg = loadConfig();
+    cfg.google = creds;
+    saveConfig(cfg);
+  });
+}
+
+export function clearGoogleCredentials() {
+  return withConfigLock(() => {
+    const cfg = loadConfig();
+    if (cfg.google === undefined) return false;
+    delete cfg.google;
+    saveConfig(cfg);
+    return true;
+  });
+}
+
+/**
+ * Commit a refreshed Google credential with the same compare-and-swap
+ * discipline as commitRefreshedCredentials: don't resurrect a credential a
+ * `gtm logout` cleared, and don't clobber a newer one another process wrote.
+ */
+export function commitRefreshedGoogleCredentials(creds, expected) {
+  return withConfigLock(() => {
+    const cfg = loadConfig();
+    const current = isPlainObject(cfg.google) ? cfg.google : null;
+    if (!current?.access_token) return { ok: false, current: null };
+    const unchanged =
+      current.access_token === expected?.access_token &&
+      current.refresh_token === expected?.refresh_token;
+    if (!unchanged) return { ok: false, current };
+    cfg.google = creds;
     saveConfig(cfg);
     return { ok: true };
   });
