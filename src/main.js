@@ -202,7 +202,7 @@ export const COMMANDS = {
     run: sites.installStatus,
     usage: "converly install status <site_id>",
     flags: [],
-    help: 'Check whether tracking is live. detection "confirmed" = proven; "never_seen" = no conversions captured yet (NOT proof the snippet is missing).',
+    help: 'Check whether tracking is live. The loader phones home on page load, so after installing, open any page of the site once and re-run this. detection "confirmed" means the loader was seen running (or a conversion was captured). origin_authorized false means the loader runs but the site domain does not match, so conversions get rejected. Fix that with sites update. "never_seen" means it never phoned home. Either it is not installed (site builders need a republish) or no page has loaded since install. Webflow-app installs and privacy-signal visitors never send heartbeats, so for those prove capture with a real submission in events list.',
   },
   "destinations types": {
     run: destinations.types,

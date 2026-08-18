@@ -57,10 +57,13 @@ export async function snippet({ args, origin }) {
     ...result,
     next_step:
       "Add this tag to the website's <head> (do it yourself if you have " +
-      "repo access, otherwise hand it to the user). Then verify with " +
-      "`converly install status " +
+      "repo access, otherwise hand it to the user; site builders need a " +
+      "republish before it is live). Then load any page of the site once " +
+      "in a real browser (you can do this yourself if you have browser " +
+      "tools) and verify with `converly install status " +
       args[0] +
-      "` — detection becomes \"confirmed\" once the loader phones home.",
+      '`. The loader phones home on page load and detection becomes ' +
+      '"confirmed" within moments.',
   };
 }
 
